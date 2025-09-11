@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -6,289 +7,313 @@
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>
+#include <stdlib.h>
+#include <math.h>
 
-#define STB_DS_IMPLEMENTATION
-#include "stb_ds.h"
-
-#define PAGE_SIZE 4096
-#define ENTRY_SIZE 4096
-
-typedef struct pcache pcache;
-
-// memory_limit must be divisible by 512kb and be less than 512gb
-// it can be more than actual memory
-void pcache_init(pcache* cache);
-
-// value must point to the ENTRY_SIZE bytes of memory
-// they will be stored in purgable memory
-void pcache_put(pcache* cache, uint64_t key, uint8_t* value, size_t max_search);
-
-// if the content wasn't evicted get will write entry content to *value if it wasn't evicted 
-// and return true
-// Otherwise, it will set *value to zero and return false
-bool pcache_get(pcache* cache, uint64_t key, uint8_t* value);
+#include "madv_free_cache.h"
 
 
 
-#define K 1024ul
-#define M (K*K)
-#define G (K*M)
 
-#define MEMORY_LIMIT (10*G)
-#define NUMBER_OF_CHUNKS 16
-
-
-#define CHUNK_SIZE (MEMORY_LIMIT / NUMBER_OF_CHUNKS)
-#define PAGES_PER_CHUNK (CHUNK_SIZE / PAGE_SIZE)
-
-#define STORED_PURGABLE (PAGE_SIZE - sizeof(uint64_t))
-#define STORED_EXTRA  (ENTRY_SIZE - STORED_PURGABLE)
-
-typedef struct {
-    uint64_t key;
-    uint8_t value[STORED_PURGABLE];
-} purgable_entry;
-
-typedef struct {
-    bool in_use;
-
-    uint8_t chunk;
-    uint32_t index;
-
-    uint8_t extra_value[STORED_EXTRA];
-} descriptor;
-
-struct pcache {
-    purgable_entry* chunks[NUMBER_OF_CHUNKS];
-    purgable_entry* next_slot;
-    size_t current_chunk;
-    size_t current_idx;
-
-    uint8_t zero_key[ENTRY_SIZE];
-    struct { uint64_t key; descriptor value; } *map; 
-};
+void smoke_test(struct madv_free_cache *cache) {
+    madv_cache_put(cache, 0, (uint8_t*) "Hello, World!");
+    madv_cache_put(cache, 1, (uint8_t*) "More text");
+    madv_cache_put(cache, 2, (uint8_t*) "Even more text");
 
 
-void pcache_init(pcache* cache) {
-    static_assert(CHUNK_SIZE % PAGE_SIZE == 0);
-    printf("Pages per chunk: %zu\n", PAGES_PER_CHUNK);
-    printf("Total capacity: %zu\n", NUMBER_OF_CHUNKS * PAGES_PER_CHUNK);
-
-    memset(cache, 0, sizeof(pcache));
-    for (int i = 0; i < NUMBER_OF_CHUNKS; ++i) {
-        int prot = PROT_READ|PROT_WRITE;
-        int flags = MAP_PRIVATE|MAP_ANONYMOUS;
-        char *chunk = mmap(0, CHUNK_SIZE, prot, flags, -1, 0);
-        assert(chunk != MAP_FAILED);
-        cache->chunks[i] = (purgable_entry*) chunk;
-    }
-    cache->next_slot = cache->chunks[0];
-}
-
-void pache_free(pcache* cache) {
-    for (int i = 0; i < NUMBER_OF_CHUNKS; ++i) {
-        munmap(cache->chunks[i], CHUNK_SIZE);
-    }
-    hmfree(cache->map);
-}
-
-
-void advance_slot(pcache* cache) {
-    cache->current_idx++;
-    cache->next_slot++;
-    if (cache->current_idx == PAGES_PER_CHUNK) {
-        // int ret = madvise(cache->chunks[cache->current_chunk], CHUNK_SIZE, MADV_DONTNEED);
-        // printf("madvise for chunk %d returned %d\n", cache->current_chunk, ret);
-        // assert(ret == 0);
-
-        cache->current_chunk = (cache->current_chunk + 1) % NUMBER_OF_CHUNKS;
-        cache->current_idx = 0;
-        cache->next_slot = cache->chunks[cache->current_chunk];
-        // printf("Switched to chunk %zu\n", cache->current_chunk);
-    }
-}
-
-void pcache_put(pcache* cache, uint64_t key, uint8_t* value, size_t max_search) {
-    if (key == 0) {
-        memmove(cache->zero_key, value, ENTRY_SIZE);
-        return;
-    }
-    for (size_t i = 0; i < max_search; ++i) {
-        if (cache->next_slot->key == 0) {
-            break;
-        }
-        advance_slot(cache);
-    }
-    // uint64_t old = cache->next_slot->key;
-    // if (old != 0) hmdel(cache->map, old);
-
-    cache->next_slot->key = key;
-    memmove(cache->next_slot->value, value, STORED_PURGABLE);
-
-    descriptor desc = {
-        .in_use = true,
-        .chunk = cache->current_chunk,
-        .index = cache->current_idx,
-        .extra_value = {0},
-    };
-    memmove(desc.extra_value, value + STORED_PURGABLE, STORED_EXTRA);
-
-    
-
-    hmput(cache->map, key, desc);
-    // Sanity-check the value we just inserted
-    {
-        descriptor chk = hmget(cache->map, key);
-        assert(chk.in_use);
-        assert(chk.chunk == desc.chunk);
-        assert(chk.index == desc.index);
-    }
-    
-
-    advance_slot(cache);
-}   
-
-
-bool pcache_get(pcache* cache, uint64_t key, uint8_t* value) {
-    if (key == 0) {
-        memmove(value, cache->zero_key, ENTRY_SIZE);
-        return true;
-    }
-    descriptor desc = hmget(cache->map, key);
-    // if (key == 2) {
-    //     printf("Get %lu %lu/%lu\n", key, desc.chunk, desc.index);
-    // }
-
-    if (!desc.in_use) {
-        return false;
-    }
-    
-    purgable_entry* entry = &cache->chunks[desc.chunk][desc.index];
-    if (entry->key != key) {
-        // This entry was evicted
-        return false;
-    }
-    memmove(value, entry->value, STORED_PURGABLE);
-    if (entry->key != key) {
-        printf("Evicted just now!\n");
-        // This entry was evicted just now!
-        return false;
-    }
-
-    memmove(value + STORED_PURGABLE, desc.extra_value, STORED_EXTRA);
-    return true;
-}
-
-void pcache_put_str(pcache* cache, uint64_t key, const char* value) {
-    assert(strlen(value) < STORED_PURGABLE);
-    pcache_put(cache, key, (uint8_t*) value, 0);
-}
-
-void smoke_test(void) {
-    pcache cache;
-    pcache_init(&cache);
-
-
-
-    pcache_put_str(&cache, 1, "Hello");
-    pcache_put_str(&cache, 2, "World");
     char value[ENTRY_SIZE];
-    bool res = pcache_get(&cache, 1, (uint8_t*) value);
-    assert(res);
-    assert(strcmp(value, "Hello") == 0);
+    
+    int res = madv_cache_get(cache, 0, (uint8_t*) value);
     printf("value: %s\n", value);
+    assert(res==0);
+    assert(strcmp(value, "Hello, World!") == 0);
 
 
-    res = pcache_get(&cache, 2, (uint8_t*) value);
-    assert(res);
-    assert(strcmp(value, "World") == 0);
+    res = madv_cache_get(cache, 1, (uint8_t*) value);
     printf("value: %s\n", value);
+    assert(res==0);
+    assert(strcmp(value, "More text") == 0);
 
-    pache_free(&cache);
+
+    res = madv_cache_get(cache, 2, (uint8_t*) value);
+    printf("value: %s\n", value);
+    assert(res==0);
+    assert(strcmp(value, "Even more text") == 0);
 }
 
-int put_idx = 0;
+static uint64_t splitmix64(uint64_t *state) {
+    uint64_t z = (*state += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
 
-void put_test(pcache* cache, size_t num) {
-    put_idx++;
+void next_value(char value[ENTRY_SIZE], uint64_t* rng_key, uint64_t* rng_value) {
+    *rng_key = splitmix64(rng_key);
+    *rng_value = splitmix64(rng_value);
+    sprintf(value, "Value %lu:%lu", *rng_key, *rng_value);
+}
+
+void test_put(struct madv_free_cache* cache, uint64_t rng_key, uint64_t rng_value, size_t num) {
     for (size_t i = 0; i < num; ++i) {
         char value[ENTRY_SIZE];
-        sprintf(value, "Value %d:%zu", put_idx, i);
-        pcache_put_str(cache, i, value);
-        // if (i % 10000 == 0) {
-            // printf("ASDSDD %d, %p %zu values\n", put_idx, cache->map, i);
-        // }
+        next_value(value, &rng_key, &rng_value);
+
+        madv_cache_put(cache, rng_key, (uint8_t*) value);
     }
-    printf("Put %zu values\n", num);
-    printf("map pointer: %p\n", (void*) cache->map);
+    printf("Put %lu K values\n", num/K);
 }
 
-void get_test(pcache* cache, size_t num, bool fix) {
-    size_t found = 0;
+float test_get(struct madv_free_cache* cache, uint64_t rng_key, uint64_t rng_value, size_t num, bool fix) {
+    size_t misses = 0;
     for (size_t i = 0; i < num; ++i) {
         char expected[ENTRY_SIZE];
-        sprintf(expected, "Value %d:%zu", put_idx, i);
+        next_value(expected, &rng_key, &rng_value);
 
         char value[ENTRY_SIZE];
-        bool res = pcache_get(cache, i, (uint8_t*) value);
-        found += res;
+        int res = madv_cache_get(cache, rng_key, (uint8_t*) value);
+        assert(res>=0);
+        if (res==1) {
+            misses++;
+            if (fix) {
+                madv_cache_put(cache, rng_key, (uint8_t*) expected);
+            }
+            continue;
+        }
         // printf("value: %s\n", value);
-        if(res && strcmp(value, expected) != 0) {
+        if(strcmp(value, expected) != 0) {
             printf("Expected %s, got %s\n", expected, value);
             exit(1);
         }
-        if (!res && fix) {
-            pcache_put_str(cache, i, expected);
-        }
     }
-    printf("Got %zu of %zu values\n", found, num);
+    float hitrate = (float) (num - misses) / (float) num;   
+    // printf("Hits: %zuK of %zuK (%.2f%%)\n", (num - misses)/K, num/K, hitrate * 100);
+    return hitrate;
 }
 
-void put_get_test(pcache *cache, size_t iterations, size_t num) {
-    for (int i = 0; i < iterations; ++i) {
-        put_test(cache, num);
-        get_test(cache, num, false);
-        printf("Iteration %d done\n", i);
+uint64_t global_seed = 1;
+
+uint64_t next_seed(void) {
+    splitmix64(&global_seed);
+    return global_seed + 1; // So that we don't follow the same path every time
+}
+
+void put_get_test(struct madv_free_cache *cache, size_t iterations, size_t entries_cnt) {
+    printf("==Put-get test: %zu iterations, %zuK entries per iteration\n", iterations, entries_cnt/K);
+    for (size_t i = 0; i < iterations; ++i) {
+        uint64_t rng_key = next_seed();
+        uint64_t rng_value = next_seed();
+        
+        test_put(cache, rng_key, rng_value, entries_cnt);
+        test_get(cache, rng_key, rng_value, entries_cnt, false);
+        printf("Iteration %zu done\n\n", i + 1);
         sleep(1);
     }
 }
 
-void run_put_get_tests(size_t iterations, size_t num){
-    pcache cache;
-    pcache_init(&cache);
-    put_get_test(&cache, iterations, num);
-    pache_free(&cache);
+void run_put_get_tests(size_t iterations, size_t entries_cnt){
+    struct madv_free_cache cache;
+    madv_cache_init(&cache);
+    put_get_test(&cache, iterations, entries_cnt);
+    madv_cache_free(&cache);
 }
 
-void flush_then_small_test(void) {
+void run_flush_then_small_test(void) {
     printf("\nStarting flush then small test\n\n");
-    pcache cache;
-    pcache_init(&cache);
-    put_get_test(&cache, 5, 2000*1000);
+
+    struct madv_free_cache cache;
+    madv_cache_init(&cache);
+    put_get_test(&cache, 10, 3 * M);
     printf("Now small\n\n");  
 
-    pcache_put_str(&cache, 1, "Hello");
-    char value[ENTRY_SIZE];
-    bool res = pcache_get(&cache, 1, (uint8_t*) value);
-    assert(res);
-    assert(strcmp(value, "Hello") == 0);
-    
-
     sleep(1);
-    put_test(&cache, 10*1000);
-    for (int i = 0; i < 10; ++i) {
-        get_test(&cache, 10*1000, true);
+
+    uint64_t rng_key = next_seed();
+    uint64_t rng_value = next_seed();
+    
+    test_put(&cache, rng_key, rng_value, 10*1000);
+    for (size_t i = 0; i < 10; ++i) {
+        test_get(&cache, rng_key, rng_value, 10*1000, true);
         sleep(1);
     }
-    pache_free(&cache);
+    madv_cache_free(&cache);
 }
 
-int main() {
-    smoke_test();
-    run_put_get_tests(1, 1000);
-    run_put_get_tests(1, 100*1000);
+void run_smoke_test(void) {
+    struct madv_free_cache cache;
+    madv_cache_init(&cache);
+    smoke_test(&cache);
+    madv_cache_free(&cache);
+}
 
+#define LADDER_ITERATIONS 20
+#define LADDER_PER_ITERATION (500 * K)
+
+void run_ladder_test(bool fix) {
+    printf("\n==Starting ladder test, fix: %d\n", fix);
+    system("free -h");
+    printf("Per iteration: %.2fGb\n", (float) LADDER_PER_ITERATION * ENTRY_SIZE / (float) G);
+    struct madv_free_cache cache;
+    madv_cache_init(&cache);
+
+    
+    uint64_t rng_keys[LADDER_ITERATIONS];
+    uint64_t rng_values[LADDER_ITERATIONS];
+    for (size_t i = 0; i < LADDER_ITERATIONS; ++i) {
+        rng_keys[i] = next_seed();
+        rng_values[i] = next_seed();
+    
+        test_put(&cache, rng_keys[i], rng_values[i], LADDER_PER_ITERATION);
+        for (size_t j = 0; j < i; ++j) {
+            printf("Trying previous batach %zu/%zu: ", j, i);
+            test_get(&cache, rng_keys[j], rng_values[j], LADDER_PER_ITERATION, true);
+        }
+        sleep(1);
+    }
+    
+    madv_cache_free(&cache);
+}
+
+#define SUBSET_ITERATIONS 10
+#define SUBSET_CNT 64
+#define TOTAL_SIZE (16 * G)
+#define ENTRIES_PER_SUBSET (TOTAL_SIZE / SUBSET_CNT / ENTRY_SIZE)
+
+#define SUBSET_SPECIAL_CNT 5
+
+void run_special_subsets_test() {
+    printf("\n==Starting special subsets test\n");
+    float special_ratio = (float) SUBSET_SPECIAL_CNT / (float) SUBSET_CNT;
+    float special_size = special_ratio * TOTAL_SIZE;
+    printf("Total size: %zuGb. Special size: %.2fGb\n", TOTAL_SIZE/G, special_size/G);
+    system("free -h");
+    uint64_t rng_keys[SUBSET_CNT];
+    uint64_t rng_values[SUBSET_CNT];
+    size_t special_idxs[SUBSET_SPECIAL_CNT];
+
+    for (size_t i = 0; i < SUBSET_SPECIAL_CNT; ++i) {
+        special_idxs[i] = next_seed() % SUBSET_CNT;
+    }
+    
+    for (size_t i = 0; i < SUBSET_CNT; ++i) {
+        rng_keys[i] = next_seed();
+        rng_values[i] = next_seed();
+    }
+
+    struct madv_free_cache cache;
+    madv_cache_init(&cache);
+    
+    // Put everything
+    for (int j = 0; j < SUBSET_CNT; ++j) {
+        printf("Initializing subset %d/%d: ", j, SUBSET_CNT);
+        test_put(&cache, rng_keys[j], rng_values[j], ENTRIES_PER_SUBSET);
+    }
+    for (int i = 0; i < SUBSET_ITERATIONS; ++i) {
+        // Special
+        float special_hitrate_sum = 0;
+        for (size_t j = 0; j < SUBSET_CNT; ++j) {
+            size_t special_idx = special_idxs[j % SUBSET_SPECIAL_CNT];
+
+            printf("Trying special %zu/%d: ", special_idx, SUBSET_CNT);
+            special_hitrate_sum += test_get(
+                &cache, 
+                rng_keys[special_idx],
+                rng_values[special_idx],
+                ENTRIES_PER_SUBSET,
+                true);
+        }
+        // Everything
+        float normal_hitrate_sum = 0;
+        for (size_t j = 0; j < SUBSET_CNT; ++j) {
+            printf("Trying normal %zu/%d: ", j, SUBSET_CNT);
+            normal_hitrate_sum += test_get(
+                &cache, 
+                rng_keys[j],
+                rng_values[j],
+                ENTRIES_PER_SUBSET,
+                true);
+        }
+        float special_hitrate = special_hitrate_sum / SUBSET_CNT;
+        float normal_hitrate = normal_hitrate_sum / SUBSET_CNT;
+        printf("Special hitrate: %.2f%%, normal hitrate: %.2f%%\n", special_hitrate * 100, normal_hitrate * 100);
+        sleep(1);
+    }
+    madv_cache_free(&cache);
+}
+
+void run_linear_subsets_test() {
+    printf("\n==Starting linear subsets test\n");
+    printf("Total size: %zuGb. Per set size: %.2fGb\n", TOTAL_SIZE/G, TOTAL_SIZE/(float)SUBSET_CNT/G);
+    system("free -h");
+    uint64_t rng_keys[SUBSET_CNT];
+    uint64_t rng_values[SUBSET_CNT];
+    size_t special_idxs[SUBSET_SPECIAL_CNT];
+
+    for (int i = 0; i < SUBSET_SPECIAL_CNT; ++i) {
+        special_idxs[i] = next_seed() % SUBSET_CNT;
+    }
+    
+    for (int i = 0; i < SUBSET_CNT; ++i) {
+        rng_keys[i] = next_seed();
+        rng_values[i] = next_seed();
+    }
+
+    struct madv_free_cache cache;
+    madv_cache_init(&cache);
+    
+    // Put everything
+    for (int j = 0; j < SUBSET_CNT; ++j) {
+        printf("Initializing subset %d/%d: ", j+1, SUBSET_CNT);
+        test_put(&cache, rng_keys[j], rng_values[j], ENTRIES_PER_SUBSET);
+    }
+    for (int i = 0; i < SUBSET_ITERATIONS; ++i) {
+        float hitrate_sum[SUBSET_CNT];
+        memset(hitrate_sum, 0, sizeof(hitrate_sum));
+
+        int cnt_get[SUBSET_CNT];
+        memset(cnt_get, 0, sizeof(cnt_get));
+
+        for (int j = 0; j < SUBSET_CNT; ++j) {
+            for (int k = 0; k <= j; ++k) {
+                // printf("Trying %d/%d: ", k+1, j+1);
+                float hitrate = test_get(
+                    &cache, 
+                    rng_keys[k], 
+                    rng_values[k], 
+                    ENTRIES_PER_SUBSET, 
+                    true);
+                if (k==j) {
+                    printf("Fresh hitrate %d: %.2f%%\n", j+1, hitrate * 100);
+                    cnt_get[j]++;
+                    hitrate_sum[j] += hitrate;
+                }
+            }
+        }
+        float diff_to_ideal = 0;
+        printf("Hitrate: ");
+        for (int j = 0; j < SUBSET_CNT; ++j) {
+            float hitrate = hitrate_sum[j] / cnt_get[j];
+            float ideal_hitrate = (float) (SUBSET_CNT - j) / (float) SUBSET_CNT;
+            printf("%d: %.2f%% (ideal: %.2f%%) ", j+1, hitrate * 100, ideal_hitrate * 100);
+            diff_to_ideal += fabs(hitrate - ideal_hitrate);
+        }
+        printf("\n");
+        printf("Diff to ideal: %.2f%%\n", diff_to_ideal * 100);
+        sleep(1);
+    }
+    madv_cache_free(&cache);
+}
+
+
+int main() {
+    // run_smoke_test();
+    run_put_get_tests(1, 10*K);
+    // run_ladder_test(true);
+    run_linear_subsets_test();
+    // run_special_subsets_test();
+
+    // run_put_get_tests(1, 100*1000);
     // run_put_get_tests(10, 1000*1000);
-    flush_then_small_test();
+    // run_flush_then_small_test();
     return 0;
 }
