@@ -73,19 +73,20 @@ static bool compact_next_chunk(struct madv_free_cache* cache) {
     }
 
     entry_descriptor desc = hmget(cache->map, chunk[cache->next_chunk_first_slot_idx].key);
-    if (desc.cnt_compacted > 0 && desc.cnt_get == 0) {
-        // This entry was compacted, but never got accessed
-        // No need to compact it
-        // chunk[cache->next_chunk_last_entry_idx].key = 0;
-        // cache->next_chunk_last_entry_idx--;
-        // printf("Skipping compacting entry %lu\n", chunk[cache->next_chunk_first_slot_idx].key);
-        // return true;
+    cache->compaction_rolling_cnt_get *= DECAY_FACTOR;
+    cache->compaction_rolling_cnt_get += (1 - DECAY_FACTOR) * desc.cnt_get;
+    if (desc.cnt_compacted > 0 && desc.cnt_get < COMPACTION_DISCARD_FRACTION * cache->compaction_rolling_cnt_get) {
+        // This entry wasn't accessed enough
+        chunk[cache->next_chunk_last_entry_idx].key = 0;
+        cache->next_chunk_last_entry_idx--;
+        printf("Skipping compacting entry %lu\n", chunk[cache->next_chunk_first_slot_idx].key);
+        return true;
     }
 
 
     // Move the last entry to the first slot
     memmove(&chunk[cache->next_chunk_first_slot_idx], &chunk[cache->next_chunk_last_entry_idx], PAGE_SIZE);
-    
+    desc.cnt_get = 0;
     desc.cnt_compacted = 1;
     desc.index = cache->next_chunk_first_slot_idx;
     hmput(cache->map, chunk[cache->next_chunk_first_slot_idx].key, desc);
@@ -266,10 +267,11 @@ int madv_cache_get(struct madv_free_cache* cache, uint64_t key, uint8_t* value) 
         printf("Key %lu was evicted just now!\n", key);
         return 1;
     }
-
-    desc.cnt_get = 1;
-    hmput(cache->map, key, desc);
-
+    if (desc.cnt_get < 255) {
+        desc.cnt_get++;
+        hmput(cache->map, key, desc);
+    }
+    
     memcpy(value+STORED_EXTRA, entry->value, STORED_DISCARDABLE);
     
     return 0;

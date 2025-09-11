@@ -39,6 +39,8 @@ void madv_cache_print_stats(struct madv_free_cache* cache);
 
 // Implementation constants
 #define NUMBER_OF_CHUNKS 32
+#define DECAY_FACTOR 0.7
+#define COMPACTION_DISCARD_FRACTION 0.5
 
 #define CHUNK_SIZE (MEMORY_LIMIT / NUMBER_OF_CHUNKS)
 #define PAGES_PER_CHUNK (CHUNK_SIZE / PAGE_SIZE)
@@ -72,6 +74,7 @@ struct madv_free_cache {
     size_t next_chunk_idx;
     ssize_t next_chunk_first_slot_idx;
     ssize_t next_chunk_last_entry_idx;
+    float compaction_rolling_cnt_get;
 
     bool key_zero_set; // key 0 is the sentinel value, so we have to store the value here
     uint8_t key_zero[ENTRY_SIZE]; 

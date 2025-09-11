@@ -59,7 +59,10 @@ void test_put(struct madv_free_cache* cache, uint64_t rng_key, uint64_t rng_valu
         char value[ENTRY_SIZE];
         next_value(value, &rng_key, &rng_value);
 
-        madv_cache_put(cache, rng_key, (uint8_t*) value);
+        bool result = false;
+        while(!result) {
+            result = madv_cache_put(cache, rng_key, (uint8_t*) value);
+        }
     }
     printf("Put %lu K values\n", num/K);
 }
@@ -87,14 +90,14 @@ float test_get(struct madv_free_cache* cache, uint64_t rng_key, uint64_t rng_val
         }
     }
     float hitrate = (float) (num - misses) / (float) num;   
-    // printf("Hits: %zuK of %zuK (%.2f%%)\n", (num - misses)/K, num/K, hitrate * 100);
+    printf("Hits: %zuK of %zuK (%.2f%%)\n", (num - misses)/K, num/K, hitrate * 100);
     return hitrate;
 }
 
 uint64_t global_seed = 1;
 
 uint64_t next_seed(void) {
-    splitmix64(&global_seed);
+    global_seed = splitmix64(&global_seed);
     return global_seed + 1; // So that we don't follow the same path every time
 }
 
@@ -175,8 +178,8 @@ void run_ladder_test(bool fix) {
 }
 
 #define SUBSET_ITERATIONS 10
-#define SUBSET_CNT 8
-#define TOTAL_SIZE (24 * G)
+#define SUBSET_CNT 16
+#define TOTAL_SIZE (20 * G)
 #define ENTRIES_PER_SUBSET (TOTAL_SIZE / SUBSET_CNT / ENTRY_SIZE)
 
 #define SUBSET_SPECIAL_CNT 5
@@ -241,21 +244,46 @@ void run_special_subsets_test() {
     madv_cache_free(&cache);
 }
 
+struct distribution {
+    uint64_t prob[SUBSET_CNT];
+    uint64_t sum;
+};
+
+int distribution_next(struct distribution* dist) {
+    if (dist->sum == 0) {
+        for (int i = 0; i < SUBSET_CNT; ++i) {
+            dist->sum += dist->prob[i];
+        }
+    }
+    uint64_t rng = next_seed() % dist->sum;
+    // printf("rng: %zu, sum: %zu\n", rng, dist->sum);
+    uint64_t acc = 0;
+    for (int i = 0; i < SUBSET_CNT; ++i) {
+        acc += dist->prob[i];
+        if (rng < acc) {
+            // printf("Chose %d, acc: %lu \n", i + 1, acc);
+            return i;
+        }
+    }
+    return SUBSET_CNT - 1;
+}
 void run_linear_subsets_test() {
     printf("\n==Starting linear subsets test\n");
     printf("Total size: %zuGb. Per set size: %.2fGb\n", TOTAL_SIZE/G, TOTAL_SIZE/(float)SUBSET_CNT/G);
     system("free -h");
     uint64_t rng_keys[SUBSET_CNT];
     uint64_t rng_values[SUBSET_CNT];
-    size_t special_idxs[SUBSET_SPECIAL_CNT];
+    struct distribution dist;
+    memset(&dist, 0, sizeof(dist));
 
-    for (int i = 0; i < SUBSET_SPECIAL_CNT; ++i) {
-        special_idxs[i] = next_seed() % SUBSET_CNT;
-    }
-    
+
+    float rolling_hitrate[SUBSET_CNT];
+    memset(rolling_hitrate, 0, sizeof(rolling_hitrate));
     for (int i = 0; i < SUBSET_CNT; ++i) {
         rng_keys[i] = next_seed();
         rng_values[i] = next_seed();
+        dist.prob[i] = i;
+        rolling_hitrate[i] = 0.5;
     }
 
     struct madv_free_cache cache;
@@ -266,34 +294,27 @@ void run_linear_subsets_test() {
         printf("Initializing subset %d/%d: ", j+1, SUBSET_CNT);
         test_put(&cache, rng_keys[j], rng_values[j], ENTRIES_PER_SUBSET);
     }
-    for (int i = 0; i < SUBSET_ITERATIONS; ++i) {
-        float hitrate_sum[SUBSET_CNT];
-        memset(hitrate_sum, 0, sizeof(hitrate_sum));
 
-        int cnt_get[SUBSET_CNT];
-        memset(cnt_get, 0, sizeof(cnt_get));
-
+    for (int i = 0; i < SUBSET_ITERATIONS; ++i) {    
+        // Do SUBSET_CNT number of random set reads
         for (int j = 0; j < SUBSET_CNT; ++j) {
-            for (int k = 0; k <= j; ++k) {
-                // printf("Trying %d/%d: ", k+1, j+1);
-                float hitrate = test_get(
-                    &cache, 
-                    rng_keys[k], 
-                    rng_values[k], 
-                    ENTRIES_PER_SUBSET, 
-                    true);
-                if (k==j) {
-                    printf("Fresh hitrate %d: %.2f%%\n", j+1, hitrate * 100);
-                    cnt_get[j]++;
-                    hitrate_sum[j] += hitrate;
-                }
-            }
+            int set_id = distribution_next(&dist);
+            printf("Trying set %d/%d: ", set_id+1, SUBSET_CNT);
+            float hitrate = test_get(
+                &cache, 
+                rng_keys[set_id], 
+                rng_values[set_id], 
+                ENTRIES_PER_SUBSET, 
+                true);
+            rolling_hitrate[set_id] *= DECAY_FACTOR;
+            rolling_hitrate[set_id] += (1 - DECAY_FACTOR) * hitrate;
         }
+
         float diff_to_ideal = 0;
         printf("Hitrate: ");
         for (int j = 0; j < SUBSET_CNT; ++j) {
-            float hitrate = hitrate_sum[j] / cnt_get[j];
-            float ideal_hitrate = (float) (SUBSET_CNT - j) / (float) SUBSET_CNT;
+            float hitrate = rolling_hitrate[j];
+            float ideal_hitrate = (float) j / (float) SUBSET_CNT;
             printf("%d: %.2f%% (ideal: %.2f%%) ", j+1, hitrate * 100, ideal_hitrate * 100);
             diff_to_ideal += fabs(hitrate - ideal_hitrate);
         }
