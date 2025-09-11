@@ -175,8 +175,8 @@ void run_ladder_test(bool fix) {
 }
 
 #define SUBSET_ITERATIONS 10
-#define SUBSET_CNT 64
-#define TOTAL_SIZE (16 * G)
+#define SUBSET_CNT 8
+#define TOTAL_SIZE (24 * G)
 #define ENTRIES_PER_SUBSET (TOTAL_SIZE / SUBSET_CNT / ENTRY_SIZE)
 
 #define SUBSET_SPECIAL_CNT 5

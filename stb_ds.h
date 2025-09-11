@@ -610,7 +610,7 @@ static int stbds_is_key_equal(void *a, size_t elemsize, void *key, size_t keysiz
 
 #define stbds_hash_table(a)  ((stbds_hash_index *) stbds_header(a)->hash_table)
  
-void stbds_hmfree_func(void *a, size_t elemsize, size_t keyoff)
+void stbds_hmfree_func(void *a, size_t elemsize, size_t _)
 {
   if (a == NULL) return;
   if (stbds_hash_table(a) != NULL) {
