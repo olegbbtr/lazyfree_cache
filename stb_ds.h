@@ -1,8 +1,5 @@
 // stb_ds.h - v0.1 - public domain data structures - http://nothings.org/stb_ds
 
-#pragma clang system_header
-
-
 #ifndef INCLUDE_STB_DS_H
 #define INCLUDE_STB_DS_H
 
@@ -496,7 +493,11 @@ size_t stbds_hash_bytes(void *p, size_t len, size_t seed)
   unsigned char *d = (unsigned char *) p;
 
   if (len == 4) {
-    unsigned int hash = d[0] | (d[1] << 8) | (d[2] << 16) | (d[3] << 24);
+    // Avoid UB: ensure operands are unsigned before left shift
+    unsigned int hash = (unsigned int)d[0]
+                      | ((unsigned int)d[1] << 8)
+                      | ((unsigned int)d[2] << 16)
+                      | ((unsigned int)d[3] << 24);
     hash ^= seed;
     hash -= (hash<<6);
     hash ^= (hash>>17);
@@ -507,7 +508,15 @@ size_t stbds_hash_bytes(void *p, size_t len, size_t seed)
     hash ^= (hash>>15);
     return hash^seed;
   } else if (len == 8 && sizeof(size_t) == 8) {
-    size_t hash = d[0] | (d[1] << 8) | (d[2] << 16) | (d[3] << 24) | ((size_t)d[4] << 32) | ((size_t)d[5] << 40) | ((size_t)d[6] << 48) | ((size_t)d[7] << 56);
+    // Avoid UB: cast to size_t before left shift
+    size_t hash = (size_t)d[0]
+                | ((size_t)d[1] << 8)
+                | ((size_t)d[2] << 16)
+                | ((size_t)d[3] << 24)
+                | ((size_t)d[4] << 32)
+                | ((size_t)d[5] << 40)
+                | ((size_t)d[6] << 48)
+                | ((size_t)d[7] << 56);
     hash ^= seed;
     hash = (~hash) + (hash << 21);
     hash ^= STBDS_ROTATE_RIGHT(hash,24);
@@ -766,7 +775,7 @@ void *stbds_hmput_key(void *a, size_t elemsize, void *key, size_t keysize, int m
       // start searching from pos to end of bucket
       for (i=pos & STBDS_BUCKET_MASK; i < STBDS_BUCKET_LENGTH; ++i) {
         if (bucket->hash[i] == hash) {
-          if (stbds_is_key_equal(raw_a, elemsize, key, keysize, mode, bucket->index[i])) {
+          if (stbds_is_key_equal(raw_a, elemsize, key, keysize, mode, i)) {
             stbds_temp(a) = bucket->index[i];
             return STBDS_ARR_TO_HASH(a,elemsize);
           }
@@ -783,7 +792,7 @@ void *stbds_hmput_key(void *a, size_t elemsize, void *key, size_t keysize, int m
       limit = pos & STBDS_BUCKET_MASK;
       for (i = 0; i < limit; ++i) {
         if (bucket->hash[i] == hash) {
-          if (stbds_is_key_equal(raw_a, elemsize, key, keysize, mode, bucket->index[i])) {
+          if (stbds_is_key_equal(raw_a, elemsize, key, keysize, mode, i)) {
             stbds_temp(a) = bucket->index[i];
             return STBDS_ARR_TO_HASH(a,elemsize);
           }
