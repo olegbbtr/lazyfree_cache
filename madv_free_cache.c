@@ -19,7 +19,9 @@ static void set_current_chunk(struct madv_free_cache* cache, size_t idx) {
 }
 
 void madv_cache_init(struct madv_free_cache* cache) {
+    static_assert(sizeof(entry_descriptor) == 16, "entry_descriptor size is not 16 bytes");
     static_assert(CHUNK_SIZE % PAGE_SIZE == 0, "Chunk size must be a multiple of page size");
+    static_assert(STORED_EXTRA==8, "STORED_EXTRA is not 8 bytes");
     printf("Memory limit: %zu Gb\n", MEMORY_LIMIT/G);
     printf("Total pages: %zu\n", NUMBER_OF_CHUNKS * PAGES_PER_CHUNK);
     printf("Chunk size: %zu Mb\n", CHUNK_SIZE/M);
@@ -208,7 +210,9 @@ bool madv_cache_put(struct madv_free_cache* cache, uint64_t key, const uint8_t* 
 
     
     if (key==2015046830383809606ul) {
-        printf("DEBUG: Put key %lu to chunk %d, index %d. Extra value: %s\n", key, desc.chunk, desc.index, desc.extra_value);
+        // desc.extra_value is not null-terminated; print a bounded slice
+        printf("DEBUG: Put key %lu to chunk %d, index %d. Extra value: '%.*s'\n",
+               key, desc.chunk, desc.index, (int)STORED_EXTRA, (const char*)desc.extra_value);
     }
 
     // Sanity-check the value we just inserted
@@ -244,7 +248,9 @@ int madv_cache_get(struct madv_free_cache* cache, uint64_t key, uint8_t* value) 
         return -1;
     }
     if (key==2015046830383809606ul) {
-        printf("DEBUG: Get key %lu from chunk %d, index %d, entry: %p, Extra value: %s\n", key, desc.chunk, desc.index, entry, desc.extra_value);
+        // desc.extra_value is not null-terminated; print a bounded slice
+        printf("DEBUG: Get key %lu from chunk %d, index %d, entry: %p, Extra value: '%.*s'\n",
+               key, desc.chunk, desc.index, (void*)entry, (int)STORED_EXTRA, (const char*)desc.extra_value);
     }
     if (entry == NULL) {
         // Was evicted
