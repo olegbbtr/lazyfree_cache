@@ -10,35 +10,40 @@
 #include <stdlib.h>
 #include <math.h>
 
-#include "madv_free_cache.h"
+#include "madv_cache.h"
 
 
 
 
-void smoke_test(struct madv_free_cache *cache) {
-    madv_cache_put(cache, 0, (uint8_t*) "Hello, World!");
-    madv_cache_put(cache, 1, (uint8_t*) "More text");
-    madv_cache_put(cache, 2, (uint8_t*) "Even more text");
+void put_str(struct madv_cache *cache, uint64_t key, const char* value) {
+    char buf[ENTRY_SIZE];
+    memset(buf, 0, ENTRY_SIZE);
+    strcpy(buf, value);
+    bool ok = madv_cache_put(cache, key, (uint8_t*) buf);
+    printf("Put %s: %d\n", value, ok);
+    assert(ok);
+}
 
+void check_str(struct madv_cache *cache, uint64_t key, const char* value) {
+    char buf[ENTRY_SIZE];
+    bool ok = madv_cache_get(cache, key, (uint8_t*) buf);
+    printf("Got %s\n", buf);
+    assert(ok);
+    assert(strcmp(buf, value) == 0);
+}
 
-    char value[ENTRY_SIZE];
+void run_smoke_test() {
+    struct madv_cache cache;
+    madv_cache_init(&cache);
+    put_str(&cache, 0, "Hello, World!");
+    put_str(&cache, 1, "More text");
+    put_str(&cache, 2, "Even more text");
+
+    check_str(&cache, 0, "Hello, World!");
+    check_str(&cache, 1, "More text");
+    check_str(&cache, 2, "Even more text");
     
-    int res = madv_cache_get(cache, 0, (uint8_t*) value);
-    printf("value: %s\n", value);
-    assert(res==0);
-    assert(strcmp(value, "Hello, World!") == 0);
-
-
-    res = madv_cache_get(cache, 1, (uint8_t*) value);
-    printf("value: %s\n", value);
-    assert(res==0);
-    assert(strcmp(value, "More text") == 0);
-
-
-    res = madv_cache_get(cache, 2, (uint8_t*) value);
-    printf("value: %s\n", value);
-    assert(res==0);
-    assert(strcmp(value, "Even more text") == 0);
+    madv_cache_free(&cache);
 }
 
 static uint64_t splitmix64(uint64_t *state) {
@@ -54,32 +59,34 @@ void next_value(char value[ENTRY_SIZE], uint64_t* rng_key, uint64_t* rng_value) 
     sprintf(value, "Value %lu:%lu", *rng_key, *rng_value);
 }
 
-void test_put(struct madv_free_cache* cache, uint64_t rng_key, uint64_t rng_value, size_t num) {
+void test_put(struct madv_cache* cache, uint64_t rng_key, uint64_t rng_value, size_t size) {
+    size_t num = size / ENTRY_SIZE;
+    // printf("Starting put %.2fGb, %zu K entries\n", (float) size / G, num/K);
     for (size_t i = 0; i < num; ++i) {
         char value[ENTRY_SIZE];
         next_value(value, &rng_key, &rng_value);
 
-        bool result = false;
-        while(!result) {
-            result = madv_cache_put(cache, rng_key, (uint8_t*) value);
-        }
+        bool ok = madv_cache_put(cache, rng_key, (uint8_t*) value);
+        assert(ok);
     }
-    printf("Put %lu K values\n", num/K);
+    printf("Finished put %.2fGb, %zu K entries\n", (float) size / G, num/K);
 }
 
-float test_get(struct madv_free_cache* cache, uint64_t rng_key, uint64_t rng_value, size_t num, bool fix) {
+float test_get(struct madv_cache* cache, uint64_t rng_key, uint64_t rng_value, size_t size, bool fix) {
+    size_t num = size / (size_t) ENTRY_SIZE;
+    // printf("Starting get %.2fGb, %zu K entries\n", (float) size / G, num/K);
     size_t misses = 0;
     for (size_t i = 0; i < num; ++i) {
         char expected[ENTRY_SIZE];
         next_value(expected, &rng_key, &rng_value);
 
         char value[ENTRY_SIZE];
-        int res = madv_cache_get(cache, rng_key, (uint8_t*) value);
-        assert(res>=0);
-        if (res==1) {
+        bool ok = madv_cache_get(cache, rng_key, (uint8_t*) value);
+        if (!ok) {
             misses++;
             if (fix) {
-                madv_cache_put(cache, rng_key, (uint8_t*) expected);
+                bool ok = madv_cache_put(cache, rng_key, (uint8_t*) expected);
+                assert(ok);
             }
             continue;
         }
@@ -90,7 +97,7 @@ float test_get(struct madv_free_cache* cache, uint64_t rng_key, uint64_t rng_val
         }
     }
     float hitrate = (float) (num - misses) / (float) num;   
-    printf("Hits: %zuK of %zuK (%.2f%%)\n", (num - misses)/K, num/K, hitrate * 100);
+    printf("Finished get %fGb: hit %zuK of %zuK (%.2f%%)\n", (float) size / G, (num - misses)/K, num/K, hitrate * 100);
     return hitrate;
 }
 
@@ -101,79 +108,27 @@ uint64_t next_seed(void) {
     return global_seed + 1; // So that we don't follow the same path every time
 }
 
-void put_get_test(struct madv_free_cache *cache, size_t iterations, size_t entries_cnt) {
-    printf("==Put-get test: %zu iterations, %zuK entries per iteration\n", iterations, entries_cnt/K);
-    for (size_t i = 0; i < iterations; ++i) {
-        uint64_t rng_key = next_seed();
-        uint64_t rng_value = next_seed();
-        
-        test_put(cache, rng_key, rng_value, entries_cnt);
-        test_get(cache, rng_key, rng_value, entries_cnt, false);
-        printf("Iteration %zu done\n\n", i + 1);
-        sleep(1);
-    }
-}
 
-void run_put_get_tests(size_t iterations, size_t entries_cnt){
-    struct madv_free_cache cache;
-    madv_cache_init(&cache);
-    put_get_test(&cache, iterations, entries_cnt);
-    madv_cache_free(&cache);
-}
-
-void run_flush_then_small_test(void) {
-    printf("\nStarting flush then small test\n\n");
-
-    struct madv_free_cache cache;
-    madv_cache_init(&cache);
-    put_get_test(&cache, 10, 3 * M);
-    printf("Now small\n\n");  
-
-    sleep(1);
-
+void put_get_test(struct madv_cache *cache, size_t size) {
     uint64_t rng_key = next_seed();
     uint64_t rng_value = next_seed();
     
-    test_put(&cache, rng_key, rng_value, 10*1000);
-    for (size_t i = 0; i < 10; ++i) {
-        test_get(&cache, rng_key, rng_value, 10*1000, true);
-        sleep(1);
-    }
-    madv_cache_free(&cache);
+    test_put(cache, rng_key, rng_value, size);
+    float hitrate = test_get(cache, rng_key, rng_value, size, false);
+    assert(hitrate > 0.99);
 }
 
-void run_smoke_test(void) {
-    struct madv_free_cache cache;
+void run_put_get_tests(size_t iterations, size_t size){
+    printf("\n==Put-get test: %zu iterations, %.2fGb per iteration\n", iterations, (float) size / (float) G);
+    struct madv_cache cache;
     madv_cache_init(&cache);
-    smoke_test(&cache);
-    madv_cache_free(&cache);
-}
-
-#define LADDER_ITERATIONS 20
-#define LADDER_PER_ITERATION (500 * K)
-
-void run_ladder_test(bool fix) {
-    printf("\n==Starting ladder test, fix: %d\n", fix);
-    system("free -h");
-    printf("Per iteration: %.2fGb\n", (float) LADDER_PER_ITERATION * ENTRY_SIZE / (float) G);
-    struct madv_free_cache cache;
-    madv_cache_init(&cache);
-
     
-    uint64_t rng_keys[LADDER_ITERATIONS];
-    uint64_t rng_values[LADDER_ITERATIONS];
-    for (size_t i = 0; i < LADDER_ITERATIONS; ++i) {
-        rng_keys[i] = next_seed();
-        rng_values[i] = next_seed();
-    
-        test_put(&cache, rng_keys[i], rng_values[i], LADDER_PER_ITERATION);
-        for (size_t j = 0; j < i; ++j) {
-            printf("Trying previous batach %zu/%zu: ", j, i);
-            test_get(&cache, rng_keys[j], rng_values[j], LADDER_PER_ITERATION, true);
-        }
+
+    for (size_t i = 0; i < iterations; ++i) {
+        put_get_test(&cache, size);
+        printf("Iteration %zu done\n", i + 1);
         sleep(1);
     }
-    
     madv_cache_free(&cache);
 }
 
@@ -203,7 +158,7 @@ void run_special_subsets_test() {
         rng_values[i] = next_seed();
     }
 
-    struct madv_free_cache cache;
+    struct madv_cache cache;
     madv_cache_init(&cache);
     
     // Put everything
@@ -267,6 +222,9 @@ int distribution_next(struct distribution* dist) {
     }
     return SUBSET_CNT - 1;
 }
+
+#define DECAY_FACTOR 0.9
+
 void run_linear_subsets_test() {
     printf("\n==Starting linear subsets test\n");
     printf("Total size: %zuGb. Per set size: %.2fGb\n", TOTAL_SIZE/G, TOTAL_SIZE/(float)SUBSET_CNT/G);
@@ -286,7 +244,7 @@ void run_linear_subsets_test() {
         rolling_hitrate[i] = 0.5;
     }
 
-    struct madv_free_cache cache;
+    struct madv_cache cache;
     madv_cache_init(&cache);
     
     // Put everything
@@ -325,12 +283,131 @@ void run_linear_subsets_test() {
     madv_cache_free(&cache);
 }
 
+#define SUBSET_SIZE (1 * G)
+
+void put_large(struct madv_cache* cache, uint64_t rng_key, uint64_t rng_value, size_t size) {
+    assert(size % SUBSET_SIZE == 0);
+    
+    size_t subsets = size / SUBSET_SIZE;
+    printf("Putting %zuGb in %zu subsets\n", size / G, subsets);
+    for (size_t i = 0; i < subsets; ++i) {
+        printf("Put subset %zu/%zu: ", i, subsets);
+        test_put(cache, rng_key + i, rng_value + i, SUBSET_SIZE);
+    }
+}
+
+float get_large(struct madv_cache* cache, uint64_t rng_key, uint64_t rng_value, size_t size, bool fix) {
+    assert(size % SUBSET_SIZE == 0);
+    
+    size_t subsets = size / SUBSET_SIZE;
+    printf("Getting %zuGb in %zu subsets\n", size / G, subsets);
+    float hitrate_sum = 0;
+    for (size_t i = 0; i < subsets; ++i) {
+        printf("Get subset %zu/%zu: ", i, subsets);
+        hitrate_sum += test_get(cache, rng_key + i, rng_value + i, SUBSET_SIZE, fix);
+    }
+    return hitrate_sum / subsets;
+}
+
+#define LARGE_SIZE (20 * G)
+#define SMALL_SIZE (10 * M)
+
+void run_large_then_small_test() {
+    printf("\n==Starting large then small test\n");
+    system("free -h");
+    printf("Large size: %zuGb, small size: %zuMb\n", LARGE_SIZE/G, SMALL_SIZE/M);
+    struct madv_cache cache;
+    madv_cache_init(&cache);
+    
+    uint64_t rng_key = next_seed();
+    uint64_t rng_value = next_seed();
+    
+    put_large(&cache, rng_key, rng_value, LARGE_SIZE);
+
+
+    get_large(&cache, rng_key, rng_value, 1 * G, true);
+    get_large(&cache, rng_key, rng_value, 1 * G, true);
+    
+    sleep(1);
+    
+    test_put(&cache, rng_key, rng_value, SMALL_SIZE / ENTRY_SIZE);
+
+    test_get(&cache, rng_key, rng_value, SMALL_SIZE / ENTRY_SIZE, true);
+    test_get(&cache, rng_key, rng_value, SMALL_SIZE / ENTRY_SIZE, true);
+
+    madv_cache_free(&cache);
+}
+
+
+void run_fix_test() {
+    printf("\n==Starting fix test\n");
+    system("free -h");
+    printf("Large size: %zuGb, small size: %zuMb\n", LARGE_SIZE/G, SMALL_SIZE/M);
+    struct madv_cache cache;
+    madv_cache_init(&cache);
+    
+    uint64_t rng_key = next_seed();
+    uint64_t rng_value = next_seed();
+    
+    put_large(&cache, rng_key, rng_value, LARGE_SIZE);
+
+
+    float hitrate = test_get(&cache, rng_key, rng_value, 10 * PAGE_SIZE, true);
+    assert(hitrate < 0.99);
+
+    cache.verbose = true;
+    hitrate = test_get(&cache, rng_key, rng_value, 10 * PAGE_SIZE, true);
+    assert(hitrate > 0.99);
+
+    madv_cache_free(&cache);
+}
+
+
+#define LADDER_ITERATIONS 20
+#define LADDER_SUBSET (2 * G)
+void run_ladder_test(bool fix, bool twice) {
+    printf("\n==Starting ladder test, fix: %d\n", fix);
+    system("free -h");
+
+
+    struct madv_cache cache;
+    madv_cache_init(&cache);
+    
+    uint64_t rng_keys[LADDER_ITERATIONS];
+    uint64_t rng_values[LADDER_ITERATIONS];
+    for (size_t i = 0; i < LADDER_ITERATIONS; ++i) {
+        rng_keys[i] = next_seed();
+        rng_values[i] = next_seed();
+    
+        test_put(&cache, rng_keys[i], rng_values[i], LADDER_SUBSET);
+        for (size_t j = 0; j <= i; ++j) {
+            printf("Trying batch %zu/%zu: ", j+1, i+1);
+            test_get(&cache, rng_keys[j], rng_values[j], LADDER_SUBSET, fix);
+            if (twice) {
+                printf("Trying batch %zu/%zu: ", j+1, i+1);
+                test_get(&cache, rng_keys[j], rng_values[j], LADDER_SUBSET, fix);
+            }
+        }
+        sleep(1);
+    }
+    
+    madv_cache_free(&cache);
+}
+
 
 int main() {
-    // run_smoke_test();
-    run_put_get_tests(1, 10*K);
-    // run_ladder_test(true);
-    run_linear_subsets_test();
+    run_smoke_test();
+    run_put_get_tests(1, 100 * M);
+    run_ladder_test(true, false);
+    // run_fix_test();
+    // run_large_then_small_test();
+
+    // run_put_get_tests(1, 10 * G);
+    // run_put_get_tests(1, 100*K);
+    // run_large_then_small_test();
+    // run_ladder_test(true, true);
+
+    // run_linear_subsets_test();
     // run_special_subsets_test();
 
     // run_put_get_tests(1, 100*1000);

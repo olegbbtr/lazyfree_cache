@@ -1,4 +1,5 @@
 // stb_ds.h - v0.1 - public domain data structures - http://nothings.org/stb_ds
+#pragma clang system_header
 
 #ifndef INCLUDE_STB_DS_H
 #define INCLUDE_STB_DS_H
