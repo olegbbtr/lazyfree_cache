@@ -1,0 +1,409 @@
+#include <assert.h>
+#include <errno.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <sys/mman.h>
+
+#include "stb_ds.h"
+
+#include "bitset.h"
+#include "random.h"
+#include "test.h"
+
+
+#include "lazyfree_cache.h"
+
+#define DEBUG_KEY -1ul
+
+#define NUMBER_OF_CHUNKS 16
+static_assert(NUMBER_OF_CHUNKS < (1 << 8), "Too many chunks");
+
+// This guarantees we switch chunks < 50% of the writes
+#define MIN_FREE_TOTAL_PAGES (2 * NUMBER_OF_CHUNKS)
+
+
+struct discardable_entry {
+    uint8_t head;
+    uint8_t tail[PAGE_SIZE-1];
+};
+static_assert(sizeof(struct discardable_entry) == PAGE_SIZE, "Discardable entry size is not equal to page size");
+
+struct entry_descriptor {
+    uint32_t index;
+    int8_t chunk;
+};
+
+struct chunk {
+    struct discardable_entry* entries; // anonymous mmap size=CHUNK_SIZE
+    bitset_t bit0;              // malloc size=PAGES_PER_CHUNK/8 
+    uint32_t* free_pages;              // malloc size=PAGES_PER_CHUNK
+    cache_key_t* keys;                 // malloc size=PAGES_PER_CHUNK
+    uint32_t free_pages_count;
+    uint32_t len;
+};
+
+struct lazyfree_cache {
+    size_t cache_capacity;
+    size_t pages_per_chunk;
+    size_t chunk_size;
+
+    size_t current_chunk_idx;
+    struct chunk chunks[NUMBER_OF_CHUNKS];
+
+    struct { uint64_t key; struct entry_descriptor value; } *map; 
+
+    size_t total_free_pages;
+
+    cache_key_t last_key;
+    uint8_t *locked_head;
+    struct entry_descriptor locked_desc;
+    bool locked_read;
+    bool verbose;
+};
+
+
+
+static_assert(sizeof(struct entry_descriptor) == 8, "entry_descriptor size is not 8 bytes");
+const static struct entry_descriptor EMPTY_DESC = { .chunk = -1, .index = -1 };
+
+static struct lazyfree_cache* cache_new(size_t cache_capacity) {
+    struct lazyfree_cache* cache = malloc(sizeof(struct lazyfree_cache));
+    memset(cache, 0, sizeof(struct lazyfree_cache));
+
+    cache->cache_capacity = cache_capacity;
+    cache->chunk_size = cache_capacity / NUMBER_OF_CHUNKS;
+    cache->pages_per_chunk = cache->chunk_size / PAGE_SIZE;
+    
+    printf("\nInitiating cache\n");
+    printf("Cache capacity: %zuGb\n", cache_capacity/G);
+    printf("Total pages: %zuK\n", NUMBER_OF_CHUNKS * cache->pages_per_chunk/K);
+    printf("Chunk size: %zuMb\n", cache->chunk_size/M);
+    printf("Pages per chunk: %zu\n", cache->pages_per_chunk);
+    printf("\n");
+    for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
+        // Allocate all the chunks on the start
+        void *entries = mmap(0, cache->chunk_size, 
+            PROT_READ|PROT_WRITE, 
+            MAP_PRIVATE|MAP_ANONYMOUS,
+            -1, 0);
+        if (entries == MAP_FAILED) {
+            printf("Failed to allocate chunk %zu, error: %m\n", i, errno);
+            exit(1);
+        }
+        cache->chunks[i].entries = entries;
+
+        cache->chunks[i].bit0 = bitset_new(cache->pages_per_chunk);
+        assert(cache->chunks[i].bit0 != NULL);
+
+        cache->chunks[i].free_pages = malloc(cache->pages_per_chunk * sizeof(uint32_t));
+        assert(cache->chunks[i].free_pages != NULL);
+
+        cache->chunks[i].keys = malloc(cache->pages_per_chunk * sizeof(uint64_t));
+        assert(cache->chunks[i].keys != NULL);
+    }
+    cache->total_free_pages = NUMBER_OF_CHUNKS * cache->pages_per_chunk;
+    hmdefault(cache->map, EMPTY_DESC);
+    cache->locked_desc = EMPTY_DESC;
+    return cache;
+}
+
+void cache_free(struct lazyfree_cache* cache) {
+    for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
+        munmap(cache->chunks[i].entries, cache->chunk_size);
+    }
+    hmfree(cache->map);
+    free(cache);
+}
+
+
+// == Read lock implementation ==
+
+static void cache_drop(struct lazyfree_cache* cache, struct entry_descriptor desc) {
+    struct chunk* chunk = &cache->chunks[desc.chunk];
+    cache_key_t key = chunk->keys[desc.index];
+    chunk->free_pages[chunk->free_pages_count++] = desc.index;
+    chunk->keys[desc.index] = 0;
+    hmdel(cache->map, key);
+}
+
+static bool cache_read_try_lock(struct lazyfree_cache* cache, 
+                               cache_key_t key,
+                               uint8_t* head,
+                               uint8_t** tail) {
+    assert(cache->locked_head == NULL);
+    assert(cache->locked_desc.chunk == EMPTY_DESC.chunk);
+    if (cache->verbose) {
+        printf("DEBUG: Locking key %lu for read\n", key);
+    }
+
+    struct entry_descriptor desc = hmget(cache->map, key);
+
+    if (key == DEBUG_KEY) {
+        printf("DEBUG: Getting key %lu, chunk %d, index %d\n", key, desc.chunk, desc.index);
+    }
+
+    if (desc.chunk == -1) {
+        if (cache->verbose) {
+            printf("Key %lu not found\n", key);
+        }
+        return false;
+    }
+    struct chunk* chunk = &cache->chunks[desc.chunk];
+    struct discardable_entry* entry = &chunk->entries[desc.index];
+    
+    
+    *head = entry->head;
+    if (*head == 0) {
+        if (cache->verbose) {
+            printf("Key %lu was evicted by kernel\n", key);
+        }
+        cache_drop(cache, desc);
+        return false;
+    }
+
+    if (!bitset_get(chunk->bit0, desc.index)) {
+        // Move bit0 from bitset to head
+        printf("DEBUG: Moving bit0 from bitset to head\n");
+        *head &= ~1ul;
+    } else {
+        // printf("DEBUG: Bit0 is already set\n");
+    }
+
+    *tail = entry->tail;
+    cache->locked_head = &entry->head;
+    cache->locked_desc = desc;
+    cache->last_key = key;
+    cache->locked_read = true;
+    return true;
+}
+
+static bool cache_read_lock_check(struct lazyfree_cache* cache) {
+    assert(cache->locked_head != NULL);
+    assert(cache->locked_desc.chunk != EMPTY_DESC.chunk);
+    assert(cache->locked_read);
+    if (cache->verbose && !*cache->locked_head) {
+        printf("Key was evicted during read\n");
+        return false;
+    }
+    return true;
+}
+
+static void cache_read_unlock(struct lazyfree_cache* cache, bool drop) {
+    assert(cache->locked_head != NULL);
+    assert(cache->locked_desc.chunk != EMPTY_DESC.chunk);
+    assert(cache->locked_read);
+    if (cache->verbose) {
+        printf("DEBUG: Unlocking key read %lu, drop %d\n", cache->last_key, drop);
+    }
+    if (drop) {
+        cache_drop(cache, cache->locked_desc);
+    }
+    cache->locked_head = NULL;
+    cache->locked_desc = EMPTY_DESC;
+    cache->locked_read = false;
+}
+
+
+// == Write lock implementation ==
+
+static void drop_random_chunk(struct lazyfree_cache* cache) {
+    cache->current_chunk_idx = random_next() % NUMBER_OF_CHUNKS;
+    struct chunk* chunk = &cache->chunks[cache->current_chunk_idx];
+    chunk->len = 0;
+    chunk->free_pages_count = 0;
+}
+
+static void advance_chunk(struct lazyfree_cache* cache) {
+    int ret = madvise(cache->chunks[cache->current_chunk_idx].entries, 
+        cache->chunk_size, MADV_FREE);
+    assert(ret == 0);
+
+    cache->current_chunk_idx = (cache->current_chunk_idx + 1) % NUMBER_OF_CHUNKS;
+
+    // printf("DEBUG: Switched to chunk %zu\n", cache->current_chunk_idx);
+} 
+
+static struct entry_descriptor alloc_current_chunk(struct lazyfree_cache* cache) {
+    struct chunk* chunk = &cache->chunks[cache->current_chunk_idx];
+    struct entry_descriptor desc;
+    desc.chunk = cache->current_chunk_idx;
+    
+    if (chunk->len < cache->pages_per_chunk) {
+        // We have blank pages
+        desc.index = chunk->len++;
+
+        cache->total_free_pages--;
+        return desc;
+    }
+    
+    if (chunk->free_pages_count == 0) {
+        // Nothing left in this chunk
+        return EMPTY_DESC;
+    }
+
+    uint32_t idx = chunk->free_pages[chunk->free_pages_count--];
+    desc.index = idx;
+
+    cache->total_free_pages--;
+    return desc;
+}
+
+
+static void take_write_lock(struct lazyfree_cache* cache, 
+                      struct entry_descriptor desc, 
+                      uint8_t** value) {
+    struct chunk* chunk = &cache->chunks[desc.chunk];
+    struct discardable_entry* entry = &chunk->entries[desc.index];
+    cache->locked_desc = desc;
+    cache->locked_head = &entry->head;
+    *value = (uint8_t*) entry;
+}
+
+static bool cache_write_lock(struct lazyfree_cache* cache, 
+                            cache_key_t key,
+                            uint8_t **value) {
+    assert(cache->locked_head == NULL);
+    assert(cache->locked_desc.chunk == EMPTY_DESC.chunk);
+    assert(!cache->locked_read);
+    if (cache->verbose) {
+        printf("DEBUG: Locking key %lu for write\n", key);
+    }
+ 
+    struct entry_descriptor desc = hmget(cache->map, key);
+    if (key == DEBUG_KEY) {
+        printf("DEBUG: Putting key %lu, chunk %d, index %d\n", key, desc.chunk, desc.index);
+    }
+    cache->last_key = key;
+
+    if (desc.chunk != EMPTY_DESC.chunk) {
+        if (cache->verbose) {
+            printf("Found existing slot for key %lu\n", key);
+        }
+
+        take_write_lock(cache, desc, value);
+        return true;
+    }
+
+    
+    if (cache->total_free_pages < MIN_FREE_TOTAL_PAGES) {
+        if (cache->verbose) {
+            printf("No free pages, freeing up random chunk\n");
+        }
+        drop_random_chunk(cache);
+    }
+
+    if (cache->verbose) {
+        printf("Allocating from the current chunk\n");
+    }
+
+    size_t chunks_visited = 0;
+    while(desc.chunk == EMPTY_DESC.chunk) {
+        desc = alloc_current_chunk(cache);
+        if (desc.chunk != EMPTY_DESC.chunk) {
+            // Found a free page
+            break;
+        }
+
+        advance_chunk(cache);
+
+        if (cache->verbose) {
+            printf("Advanced to chunk %zu\n", cache->current_chunk_idx);
+        }
+        chunks_visited++;
+        if (chunks_visited >= NUMBER_OF_CHUNKS) {
+            // This means total_free_pages is not updated correctly
+            printf("Failed to find free page\n");
+            exit(1);
+        }
+    }
+
+    take_write_lock(cache, desc, value);
+    return true;
+}
+
+static void cache_write_unlock(struct lazyfree_cache* cache, bool drop) {
+    assert(cache->locked_desc.chunk != EMPTY_DESC.chunk);
+    assert(cache->locked_head != NULL);
+    assert(!cache->locked_read);
+
+    if (drop) {
+        cache_drop(cache, cache->locked_desc);
+    } else {
+        // Move bit0 from head to bit0
+        struct chunk* chunk = &cache->chunks[cache->locked_desc.chunk];        
+        bool bit0 = (*cache->locked_head & 1) != 0;
+        bitset_put(chunk->bit0, cache->locked_desc.index, bit0);
+        if (!bit0) {
+            if (bitset_get(chunk->bit0, cache->locked_desc.index)) {
+                // Move bit0 from bitset to head
+                printf("DEBUG: WTF\n");
+            } 
+        }
+        *cache->locked_head |= 1;
+
+        hmput(cache->map, cache->last_key, cache->locked_desc);
+        
+    }
+
+    cache->locked_desc = EMPTY_DESC;
+    cache->locked_head = NULL;
+    cache->locked_read = false;
+}
+
+// == Public functions ==
+cache_t lazyfree_cache_new(size_t cache_capacity) {
+    return cache_new(cache_capacity);
+}
+
+void lazyfree_cache_free(cache_t cache) {
+    cache_free(cache);
+}
+
+bool lazyfree_cache_write_lock(cache_t cache, 
+                               cache_key_t key,
+                               uint8_t **value) {
+    return cache_write_lock(cache, key, value);
+}
+
+bool lazyfree_cache_read_try_lock(cache_t cache, 
+                                  cache_key_t key,
+                                  uint8_t* head,
+                                  uint8_t **tail) {
+    return cache_read_try_lock(cache, key, head, tail);
+}
+
+bool lazyfree_cache_read_lock_check(cache_t cache) {
+    return cache_read_lock_check(cache);
+}
+
+void lazyfree_cache_unlock(cache_t cache, bool drop) {
+    struct lazyfree_cache* lazyfree_cache = (struct lazyfree_cache*) cache;
+    if (lazyfree_cache->verbose) {
+        printf("DEBUG: Unlocking key %lu, drop %d, locked_read %d\n", 
+            lazyfree_cache->last_key, drop, lazyfree_cache->locked_read);
+    }
+    if (lazyfree_cache->locked_read) {
+        cache_read_unlock(lazyfree_cache, drop);
+    } else {
+        cache_write_unlock(lazyfree_cache, drop);
+    }
+}
+
+// == Extra API ==
+static void print_stats(cache_t cache) {
+    struct lazyfree_cache* lazyfree_cache = (struct lazyfree_cache*) cache;
+    for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
+        struct chunk* chunk = &lazyfree_cache->chunks[i];
+        float ratio = (float) chunk->free_pages_count / (float) chunk->len;
+        printf("Chunk %zu: %u/%u (%.2f%%)\n", i, chunk->free_pages_count, chunk->len, ratio * 100);
+       
+    }
+}
+
+void lazyfree_cache_debug(cache_t cache, bool verbose) {
+    struct lazyfree_cache* lazyfree_cache = (struct lazyfree_cache*) cache;
+    lazyfree_cache->verbose = verbose;
+    print_stats(cache);
+}

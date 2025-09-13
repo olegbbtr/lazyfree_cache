@@ -1,4 +1,6 @@
-# MADV_FREE cache
+# LazyFree userspace cache
+
+
 
 This is a simple implementation of the in-memory cache with automated eviction policy based on the MADV_FREE [madvise(2)](https://man7.org/linux/man-pages/man2/madvise.2.html) parameter.
 
