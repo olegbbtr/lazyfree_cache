@@ -14,6 +14,10 @@ struct fallthrough_cache* fallthrough_cache_new(struct cache_impl impl,
                                                 size_t entry_size,
                                                 size_t entries_per_page,
                                                 void (*repopulate)(void *opaque, uint64_t key, uint8_t *value)) {
+    if (entries_per_page != 1) {
+        fprintf(stderr, "Only one entry per page supported\n");
+        abort();
+    }
     assert(entries_per_page * entry_size <= PAGE_SIZE);
 
     struct fallthrough_cache *cache = malloc(sizeof(struct fallthrough_cache));
@@ -24,11 +28,11 @@ struct fallthrough_cache* fallthrough_cache_new(struct cache_impl impl,
     cache->repopulate = repopulate;
     cache->opaque = NULL;
 
-    size_t entries = cache_size / entry_size;
-    indirect_bitset_new(&cache->present, entries, cache->entries_per_page);
+    size_t entries = cache_size / PAGE_SIZE * entries_per_page;
+    // indirect_bitset_new(&cache->present, entries, cache->entries_per_page);
 
 
-    cache->cache = impl.new(cache_size);
+    cache->cache = impl.new(cache_size, impl.mmap_impl, impl.madv_impl);
     assert(cache->cache != NULL);
     return cache;
 }
@@ -39,7 +43,7 @@ void fallthrough_cache_set_opaque(struct fallthrough_cache* cache, void *opaque)
 
 void fallthrough_cache_free(struct fallthrough_cache* cache) {
     cache->impl.free(cache->cache);
-    indirect_bitset_destroy(&cache->present);
+    // indirect_bitset_destroy(&cache->present);
     free(cache);
 }
 
@@ -55,7 +59,7 @@ static void put(struct fallthrough_cache* cache,
     memcpy(&page[page_offset * cache->entry_size], value, cache->entry_size);
     cache->impl.unlock(cache->cache, false);
 
-    indirect_bitset_put(&cache->present, key, true);
+    // indirect_bitset_put(&cache->present, key, true);
 }
 
 
@@ -66,10 +70,10 @@ static bool maybe_get(struct fallthrough_cache* cache,
         printf("\nFALLTHROUGH GET: %zu\n", key);
     }
 
-    bool present = indirect_bitset_get(&cache->present, key);
-    if (!present) {
-        return false;
-    }
+    // bool present = indirect_bitset_get(&cache->present, key);
+    // if (!present) {
+    //     return false;
+    // }
     
     uint64_t page_key = key / cache->entries_per_page;
     uint64_t page_offset = key % cache->entries_per_page;
@@ -116,7 +120,7 @@ void fallthrough_cache_get(struct fallthrough_cache* cache, uint64_t key, uint8_
 
 bool fallthrough_cache_drop(struct fallthrough_cache* cache, 
                             uint64_t key) {
-    indirect_bitset_put(&cache->present, key, false);
+    // indirect_bitset_put(&cache->present, key, false);
 
     uint8_t head;
     uint8_t *tail;

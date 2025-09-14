@@ -69,7 +69,7 @@ struct lazyfree_cache {
 static_assert(sizeof(struct entry_descriptor) == 8, "entry_descriptor size is not 8 bytes");
 static struct entry_descriptor EMPTY_DESC = { .chunk = -1, .index = -1 };
 
-static struct lazyfree_cache* cache_new(size_t cache_capacity) {
+static struct lazyfree_cache* cache_new(size_t cache_capacity, void* (*mmap_impl)(size_t size), void (*madv_impl)(void *memory, size_t size)) {
     struct lazyfree_cache* cache = malloc(sizeof(struct lazyfree_cache));
     memset(cache, 0, sizeof(struct lazyfree_cache));
 
@@ -85,14 +85,8 @@ static struct lazyfree_cache* cache_new(size_t cache_capacity) {
     printf("\n");
     for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
         // Allocate all the chunks on the start
-        void *entries = mmap(0, cache->chunk_size, 
-            PROT_READ|PROT_WRITE, 
-            MAP_PRIVATE|MAP_ANONYMOUS,
-            -1, 0);
-        if (entries == MAP_FAILED) {
-            printf("Failed to allocate chunk %zu, error: %m\n", i, errno);
-            exit(1);
-        }
+        void *entries = mmap_impl(cache->chunk_size);
+
         cache->chunks[i].entries = entries;
 
         cache->chunks[i].bit0 = bitset_new(cache->pages_per_chunk);
@@ -440,8 +434,8 @@ static void cache_write_unlock(struct lazyfree_cache* cache, bool drop) {
 }
 
 // == Public functions ==
-cache_t lazyfree_cache_new(size_t cache_capacity) {
-    return cache_new(cache_capacity);
+cache_t lazyfree_cache_new(size_t cache_capacity, void* (*mmap_impl)(size_t size), void (*madv_impl)(void *memory, size_t size)) {
+    return cache_new(cache_capacity, mmap_impl, madv_impl);
 }
 
 void lazyfree_cache_free(cache_t cache) {

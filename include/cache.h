@@ -15,8 +15,11 @@
 typedef void* cache_t;
 typedef uint64_t cache_key_t;
 
+typedef void* (*mmap_impl_t)(size_t size);
+typedef void (*madv_impl_t)(void *memory, size_t size);
+
 struct cache_impl {
-    cache_t (*new)(size_t cache_size);
+    cache_t (*new)(size_t cache_size, mmap_impl_t mmap_impl, madv_impl_t madv_impl);
     void (*free)(cache_t cache);
 
     // Locks the key for write.
@@ -35,7 +38,23 @@ struct cache_impl {
 
     // Debug
     void (*debug)(cache_t cache, bool verbose);
+
+    // Allocate memory for the cache.
+    mmap_impl_t mmap_impl;
+
+    // Advise the kernel about the memory when done writing to the chunk.
+    madv_impl_t madv_impl;
 };
+
+
+
+// == Memory allocation ==
+
+void *mmap_normal(size_t size);
+void *mmap_file(size_t size);
+
+void madv_lazyfree(void *memory, size_t size);
+void madv_noop(void *memory, size_t size);
 
 
 #endif

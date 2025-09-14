@@ -10,7 +10,7 @@ struct fallthrough_cache {
 
     void *cache;
 
-    struct indirect_bitset present;
+    // struct indirect_bitset present;
 
     size_t hits;
     size_t misses;

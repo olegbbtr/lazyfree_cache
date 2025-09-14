@@ -21,8 +21,11 @@
 #include "refill.h"
 
 
+struct fallthrough_cache *cache;
+static size_t cache_size;
+
 #define SMOKE_TEST_CNT 10
-void run_smoke_test(struct fallthrough_cache *cache) {
+void run_smoke_test() {
     refill_ctx.count = 0;
 
 
@@ -56,7 +59,7 @@ void run_smoke_test(struct fallthrough_cache *cache) {
 }
 
 // Returns hitrate
-float check_all(struct fallthrough_cache *cache, uint64_t key_seed, size_t cnt) {
+float check_all(uint64_t key_seed, size_t cnt) {
     refill_ctx.count = 0;
     printf("Checking %zu pages\n", cnt);
     for (size_t i = 0; i < cnt; ++i) {
@@ -83,16 +86,16 @@ float drop_all(struct fallthrough_cache *cache, uint64_t key_seed, size_t cnt) {
     return (float) hits / (float) cnt;
 }
 
-void run_check_twice_test(struct fallthrough_cache *cache, size_t size, float expected_hitrate) {
+void check_twice_test(size_t size, float expected_hitrate) {
     uint64_t key_seed = random_next();
     uint64_t cnt = size/PAGE_SIZE;
-    float hitrate1 = check_all(cache, key_seed, cnt);
+    float hitrate1 = check_all(key_seed, cnt);
 
     printf("Hitrate 1: %.2f%%\n", hitrate1 * 100);
     printf("\n== Start second pass ==\n");
     
     // fallthrough_cache_debug(cache, true);
-    float hitrate2 = check_all(cache, key_seed, cnt);
+    float hitrate2 = check_all(key_seed, cnt);
     printf("Hitrate 2: %.2f%%\n", hitrate2 * 100);
 
     assert(hitrate2 > hitrate1);
@@ -102,13 +105,62 @@ void run_check_twice_test(struct fallthrough_cache *cache, size_t size, float ex
 }
 
 
+void suite_lazyfree(bool full) {
+    struct cache_impl impl = lazyfree_cache_impl;
+    impl.mmap_impl = mmap_normal;
+    impl.madv_impl = madv_lazyfree;
+    
+    cache = fallthrough_cache_new(impl, 
+        cache_size, 
+        sizeof(uint64_t), 
+        1,
+        refill_cb);
+
+    run_smoke_test();
+    if (!full) {
+        return;
+    }
+
+    // Second hitrate is almost 100%
+    check_twice_test(cache_size, 0.9);
+
+    // Hitrate should be around 25%
+    check_twice_test(2*cache_size, 0.2);
+}
+
+void suite_normal() {
+    struct cache_impl impl = lazyfree_cache_impl;
+    impl.mmap_impl = mmap_normal;
+    impl.madv_impl = madv_noop;
+    
+    cache = fallthrough_cache_new(impl, 
+        cache_size, 
+        sizeof(uint64_t), 
+        1,
+        refill_cb);
+
+    run_smoke_test();    
+}
+
+void suite_disk() {
+    struct cache_impl impl = lazyfree_cache_impl;
+    impl.mmap_impl = mmap_file;
+    impl.madv_impl = madv_noop;
+
+    cache = fallthrough_cache_new(impl, 
+        cache_size, 
+        sizeof(uint64_t), 
+        1,
+        refill_cb);
+
+    run_smoke_test();
+}
+
+
 int main(int argc, char **argv) {
-    if (argc < 4) {
-        printf("Usage: %s <impl> <memory_size_gb> <suite>\n", argv[0]);
-        printf("Impls: \n");
-        printf("  lazyfree\n");
-        printf("  random\n");
-        printf("  disk\n");        
+    if (argc < 3) {
+        printf("Usage: %s <suite> <memory_size_gb>\n", argv[0]);       
+        printf("Suites: lazyfree, lazyfree_full, normal, disk\n");
         return 1;
     }
     size_t memory_size = atoll(argv[2]);
@@ -116,64 +168,26 @@ int main(int argc, char **argv) {
         printf("Memory size must be at least 1Gb\n");
         return 1;
     }
-
-    struct cache_impl impl;
-    if (strcmp(argv[1], "lazyfree") == 0) {
-        impl = lazyfree_cache_impl;
-    } else if (strcmp(argv[1], "random") == 0) {
-        impl = random_cache_impl;
-    } else {
-        printf("Unknown impl: %s\n", argv[1]);
-        return 1;
-    }
+    cache_size = memory_size * G;
 
     refill_ctx.seed = random_next();
     refill_ctx.count = 0;
-    
-    struct fallthrough_cache *cache = fallthrough_cache_new(impl, 
-        memory_size * G, 
-        sizeof(uint64_t), 
-        1,
-        refill_cb);
 
-    // fallthrough_cache_debug(cache, true);
-
-    if (strcmp(argv[3], "smoke") == 0) {
-        run_smoke_test(cache);
-    } else if (strcmp(argv[3], "check_twice") == 0) {
-        run_check_twice_test(cache, memory_size * G, 0.9);
-    } else if (strcmp(argv[3], "check_twicex2") == 0) {
-        run_check_twice_test(cache, 2*memory_size * G, 0.2);
-    }  
-    
-    else {
-        printf("Unknown suite: %s\n", argv[3]);
+    if (strcmp(argv[1], "lazyfree") == 0) {
+        suite_lazyfree(false);
+    } else if (strcmp(argv[1], "lazyfree_full") == 0) {
+        suite_lazyfree(true);
+    } else if (strcmp(argv[1], "normal") == 0) {
+        suite_normal();
+    } else if (strcmp(argv[1], "disk") == 0) {
+        suite_disk();
+    } else {
+        printf("Unknown suite: %s\n", argv[1]);
         return 1;
     }
+
     fallthrough_cache_free(cache);
 
 
     return 0;
-
-
-    // test_check_twice(cache, random_next(), 8 * M);
-    // fallthrough_cache_free(cache);
-
-    // run_put_get_tests(1, 100 * M);
-    // run_put_get_tests(5, 4 * G);
-    // run_ladder_test(true, false);
-    // run_fix_test();
-    // run_large_then_small_test();
-
-    // run_put_get_tests(1, 10 * G);
-    // run_put_get_tests(1, 100*K);
-    // run_large_then_small_test();
-    // run_ladder_test(true, true);
-
-    // run_linear_subsets_test();
-    // run_special_subsets_test();
-
-    // run_put_get_tests(1, 100*1000);
-    // run_put_get_tests(10, 1000*1000);
-    // run_flush_then_small_test();
 }

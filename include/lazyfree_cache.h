@@ -11,7 +11,7 @@
 // Cache capacity is in bytes. 
 // It should be significantly higher than actual available memory.
 // If the cache is full, it will start evicting random entries.
-cache_t lazyfree_cache_new(size_t cache_capacity);
+cache_t lazyfree_cache_new(size_t cache_capacity, mmap_impl_t mmap_impl, madv_impl_t madv_impl);
 
 // Call after done using the cache.
 void lazyfree_cache_free(cache_t cache);
@@ -58,6 +58,9 @@ void lazyfree_cache_unlock(cache_t cache, bool drop);
 
 // Prints some stats and set verbose logging
 void lazyfree_cache_debug(cache_t cache, bool verbose);
+
+
+// == Memory allocation ==
 
 
 static struct cache_impl lazyfree_cache_impl = {
