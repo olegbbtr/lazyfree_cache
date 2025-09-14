@@ -2,7 +2,7 @@
 
 This is an implementation of LazyFree cache in userspace.
 In this implementation, kernel can evict any page when there is memory pressure.
-It is based on `MADV_FREE` ([madvise(2)](https://man7.org/linux/man-pages/man2/madvise.2.html)) parameter.
+It is based on `MADV_FREE` ([madvise(2)](https://man7.org/linux/man-pages/man2/madvise.2.html)) parameter. (TODO version linux kernel)
 
 This implementation can be useful if running on a system with occasional unpredictable memory pressure, such
 that all the data is reconstructable from other sources.
@@ -141,6 +141,12 @@ after_core_hitrate=0.37
 after_core_latency_ms=32
 ```
 
+
+
+
 ## Futher improvements
 
 Can be made multithread safe with RWLock semantics, if our hashmap would support it. Can even have multiple writers, if we have multiple open chunks.
+
+
+Fallthrough cache should be able to pack multiple entries into a single page.

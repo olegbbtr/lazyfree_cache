@@ -58,6 +58,7 @@ static float testlib_check_all(struct fallthrough_cache *cache,
         if (affine_offset == 0) {
             affine_chunk = (affine_chunk + 1) % affine_chunks;
         }
+        assert(value == refill_expected(key));
     }
     float hitrate = ((float) keyset.cnt - (float) refill_ctx.count) / (float) keyset.cnt;
     printf("hitrate=%.2f%%\n", hitrate * 100);

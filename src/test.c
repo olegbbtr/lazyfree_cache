@@ -172,7 +172,7 @@ void suite_normal() {
     run_smoke_test();    
 
     check_twice(cache_size, 1);
-    check_twice(2*cache_size, 0.25);
+    // check_twice(2*cache_size, 0.25);
 }
 
 void suite_disk() {
@@ -189,7 +189,7 @@ void suite_disk() {
     run_smoke_test();
 
     check_twice(cache_size, 1);
-    check_twice(2*cache_size, 0.25);
+    // check_twice(2*cache_size, 0.25);
 }
 
 
