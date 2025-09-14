@@ -1,3 +1,6 @@
+#ifndef FALLTHROUGH_CACHE_H
+#define FALLTHROUGH_CACHE_H
+
 #include "cache.h"
 #include "bitset.h"
 
@@ -41,3 +44,4 @@ bool fallthrough_cache_drop(struct fallthrough_cache* cache, cache_key_t key);
 void fallthrough_cache_debug(struct fallthrough_cache* cache, bool verbose);
                 
 
+#endif

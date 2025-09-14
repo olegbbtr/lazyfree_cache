@@ -138,3 +138,4 @@ void fallthrough_cache_debug(struct fallthrough_cache* cache, bool verbose) {
     cache->verbose = verbose;
     cache->impl.debug(cache->cache, verbose);
 }
+

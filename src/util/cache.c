@@ -15,12 +15,18 @@
 #include "random.h"
 
 void *mmap_normal(size_t size) {
-    void *addr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    void *addr = mmap(NULL, size, 
+                PROT_READ | PROT_WRITE, 
+                MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE,
+                -1, 0);
     if (addr == MAP_FAILED) {
         perror("mmap");
         exit(1);
     }
-    printf("Anon mmap %zu Mb at %p\n", size / M, addr);
+
+    // int ret = madvise(addr, size, MADV_NOHUGEPAGE | MADV_WILLNEED);
+    // assert(ret == 0);
+    // printf("Anon mmap %zu Mb at %p\n", size / M, addr);
     return addr;
 }
 
@@ -41,26 +47,31 @@ void *mmap_file(size_t size) {
         exit(1);
     }
 
-    void *addr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, fd, 0);
+    void *addr = mmap(NULL, size, 
+        PROT_READ | PROT_WRITE, 
+        MAP_SHARED | MAP_NORESERVE, 
+        fd, 0);
     if (addr == MAP_FAILED) {
         perror("mmap");
         exit(1);
     }
+    close(fd);
+    madv_cold(addr, size);
     printf("File mmap %zu Mb at %p\n", size / M, addr);
-    int ret = madvise(addr, size, MADV_NOHUGEPAGE | MADV_WILLNEED);
-    assert(ret == 0);
     return addr;
 }
 
 void madv_lazyfree(void *memory, size_t size) {
     int ret;
 
-    // printf("MADV_FREE %zu Mb at %p\n", size / M, memory);
     ret = madvise(memory, size, MADV_FREE);
     assert(ret == 0);
+}
 
-    // ret = madvise(memory, size, MADV_WILLNEED );
-    // assert(ret == 0);
+void madv_cold(void *memory, size_t size) {
+    printf("MADV_COLD on %zu Mb at %p\n", size / M, memory);
+    int ret = madvise(memory, size,  MADV_COLD);
+    assert(ret == 0);
 }
 
 void madv_noop(void *memory, size_t size) { 

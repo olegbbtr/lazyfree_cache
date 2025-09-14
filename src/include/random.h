@@ -1,9 +1,9 @@
+#ifndef RANDOM_H
+#define RANDOM_H
+
 #include <stdint.h>
 #include <time.h>
-
-#ifndef __random_h_
-#define __random_h_
-
+    
 static uint64_t random_mix(uint64_t *state) {
     uint64_t z = (*state += 0x9E3779B97F4A7C15ULL);
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;

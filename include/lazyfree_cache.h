@@ -71,4 +71,7 @@ static struct cache_impl lazyfree_cache_impl = {
     .read_lock_check = lazyfree_cache_read_lock_check,
     .unlock = lazyfree_cache_unlock,
     .debug = lazyfree_cache_debug,
+
+    .mmap_impl = mmap_normal,
+    .madv_impl = madv_lazyfree,
 };

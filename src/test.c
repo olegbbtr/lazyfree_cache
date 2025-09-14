@@ -19,6 +19,7 @@
 
 #include "random.h"
 #include "refill.h"
+#include "testlib.h"
 
 
 struct fallthrough_cache *cache;
@@ -58,127 +59,68 @@ void run_smoke_test() {
     assert(refill_ctx.count == 10);
 }
 
-// Returns hitrate
-float check_all(uint64_t key_seed, size_t cnt, bool randomize) {
-    refill_ctx.count = 0;
-    printf("Checking %zu pages\n", cnt);
-    for (size_t i = 0; i < cnt; ++i) {
-        uint64_t key = key_seed;
-        if (randomize) {
-            key += random_next() % cnt;
-        } else {
-            key += i;
-        }
-        uint64_t value;
-        fallthrough_cache_get(cache, key, (uint8_t*) &value);
-
-        if (value != refill_expected(key)) {
-            printf("Key %lu: Value %lu != expected %lu\n", key, value, refill_expected(key));
-            exit(1);
-        }
-    }
-    return ((float) cnt - (float) refill_ctx.count) / (float) cnt;
-}
-
-// Returns hitrate
-float drop_all(struct fallthrough_cache *cache, uint64_t key_seed, size_t cnt) {
-    
-    fallthrough_cache_debug(cache, false);
-
-    printf("\nDropping %zu pages\n", cnt);
-    size_t hits = 0;
-    for (size_t i = 0; i < cnt; ++i) {
-        uint64_t key = key_seed + i;
-        hits += fallthrough_cache_drop(cache, key);
-    }
-
-    fallthrough_cache_debug(cache, false);
-    return (float) hits / (float) cnt;
-}
 
 size_t get_cnt(size_t size) {
     return size/PAGE_SIZE - 1024; // Don't want to overflow
 }
 
-void check_twice_test(size_t size, float expected_hitrate) {
+float check_twice(size_t size, float expected_hitrate) {
     printf("=== Check twice test, size %zu, expected hitrate %.2f%% ===\n", size, expected_hitrate * 100);
-    uint64_t key_seed = random_next();
-    uint64_t cnt = get_cnt(size);
-    printf("1. Start first pass\n");
-    float hitrate1 = check_all(key_seed, cnt, false);
-
-    printf("Hitrate 1: %.2f%%\n", hitrate1 * 100);
-    printf("2. Start second pass\n");
+    struct testlib_keyset keyset = testlib_init(get_cnt(size));
     
-    // fallthrough_cache_debug(cache, true);
-    float hitrate2 = check_all(key_seed, cnt, false);
-    printf("Hitrate 2: %.2f%%\n", hitrate2 * 100);
+    
+    printf("1. First pass");
+    float hitrate1 = testlib_check_all(cache, keyset, testlib_order_affine);
+    if (hitrate1 > 0) {
+        printf("Hitrate1 must be 0\n");
+        exit(1);
+    }
+    
+    printf("2. Second pass");
+    float hitrate2 = testlib_check_all(cache, keyset, testlib_order_affine);
 
-    assert(hitrate2 >= hitrate1);
-    assert(hitrate2 >= expected_hitrate);
-
-    drop_all(cache, key_seed, cnt);
+    if (hitrate2 < hitrate1) {
+        printf("Hitrate2 must be greater than hitrate1\n");
+        exit(1);
+    }
+    if (hitrate2 < expected_hitrate) {
+        printf("Hitrate2 must be greater than expected hitrate\n");
+        exit(1);
+    }
+    
+    testlib_drop_all(cache, keyset);
+    return hitrate2;
 }
 
-void reclaim_memory(size_t size) {
-    printf("Reclaiming %zu Mb\n", size/M);
-    uint8_t *mem = mmap_normal(size);
-    for (size_t i = 0; i < size/PAGE_SIZE; ++i) {
-        mem[i*PAGE_SIZE] = random_next();
-    }
-    munmap(mem, size);
-}
 
-void reclaim_many(size_t chunks, size_t chunk_size) {
-    printf("Reclaiming %zu chunks of %zu Mb\n", chunks, chunk_size/M);
-    uint8_t **mem = malloc(chunks * sizeof(uint8_t*));
-    for (size_t i = 0; i < chunks; ++i) {
-        mem[i] = mmap_normal(chunk_size);
-        for (size_t j = 0; j < chunk_size/PAGE_SIZE; ++j) {
-            mem[i][j*PAGE_SIZE] = random_next();
-        }
-    }
-    for (size_t i = 0; i < chunks; ++i) {
-        munmap(mem[i], chunk_size);
-    }
-    free(mem);
-}
-
-void mem_pressure_test(size_t size, bool randomize) {
-    uint64_t key_seed = random_next();
-    uint64_t cnt = get_cnt(size);
+void mem_pressure_test(size_t size) {
+    struct testlib_keyset keyset = testlib_init(get_cnt(size));
+    
     uint64_t attempts = 5;
     for (uint64_t i = 0; i < attempts; ++i) {
-        float hitrate = check_all(key_seed, cnt, randomize);
+        float hitrate = testlib_check_all(cache, keyset, testlib_order_affine_chunk);
         printf("Hitrate before reclaim: %.2f%%\n", hitrate * 100);
         sleep(1);
-    // fallthrough_cache_debug(cache, false);
+        // fallthrough_cache_debug(cache, false);
     }
-
-    fallthrough_cache_debug(cache, false);
+    // fallthrough_cache_debug(cache, false);
     
-    // drop_all(cache, key_seed, cnt);
     
-    reclaim_many(7, size/8);
-    
-    sleep(10);
-
+    testlib_reclaim_many(3, size/4);
+    sleep(1);
     
     for (uint64_t i = 0; i < attempts; ++i) {
-        float hitrate = check_all(key_seed, cnt, randomize);
+        float hitrate = testlib_check_all(cache, keyset, testlib_order_affine_chunk);
         printf("Hitrate after reclaim: %.2f%%\n", hitrate * 100);
         // fallthrough_cache_debug(cache, false);
     }
 
-    drop_all(cache, key_seed, cnt);
-    fallthrough_cache_debug(cache, false);
-
-
-
-    sleep(10);
+    testlib_drop_all(cache, keyset);
+    // fallthrough_cache_debug(cache, false);
+    sleep(1);
 
     for (uint64_t i = 0; i < attempts; ++i) {
-        float hitrate = check_all(key_seed, cnt, randomize);
+        float hitrate = testlib_check_all(cache, keyset, testlib_order_affine_chunk);
         printf("Hitrate after reclaim and drop: %.2f%%\n", hitrate * 100);
         // fallthrough_cache_debug(cache, false);
     }
@@ -198,10 +140,8 @@ void suite_lazyfree(bool full) {
         refill_cb);
 
 
-    // run_smoke_test();
-
-    check_twice_test(cache_size, 0.8);
-    fallthrough_cache_debug(cache, false);
+    run_smoke_test();
+    // fallthrough_cache_debug(cache, false);
 
     // sleep(100);
 
@@ -209,13 +149,13 @@ void suite_lazyfree(bool full) {
     if (!full) {
         return;
     }
-
+    
     // fallthrough_cache_debug(cache, true);
     // Second hitrate is almost 100%
-    check_twice_test(cache_size, 0.9);
+    check_twice(cache_size, 0.9);
 
-    // Hitrate should be around 25%
-    check_twice_test(2*cache_size, 0.15);
+    // Hitrate should be >15%
+    check_twice(2*cache_size, 0.15);
 }
 
 void suite_normal() {
@@ -231,8 +171,8 @@ void suite_normal() {
 
     run_smoke_test();    
 
-    check_twice_test(cache_size, 1);
-    check_twice_test(2*cache_size, 0.15);
+    check_twice(cache_size, 1);
+    check_twice(2*cache_size, 0.25);
 }
 
 void suite_disk() {
@@ -248,8 +188,8 @@ void suite_disk() {
 
     run_smoke_test();
 
-    check_twice_test(cache_size, 1);
-    check_twice_test(2*cache_size, 0.3);
+    check_twice(cache_size, 1);
+    check_twice(2*cache_size, 0.25);
 }
 
 

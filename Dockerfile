@@ -6,4 +6,4 @@ ADD . /app
 
 WORKDIR /app
 
-RUN make build/test
+RUN make build/test build/benchmark

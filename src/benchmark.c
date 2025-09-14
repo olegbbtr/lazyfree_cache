@@ -1,3 +1,178 @@
+#include "fallthrough_cache.h"
+#include "testlib.h"
+
+#include "lazyfree_cache.h"
+#include "cache.h"
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <stdlib.h>
+
+
+void run_full_set(struct fallthrough_cache* cache, size_t size) {
+    size_t cnt = size/PAGE_SIZE - 1024;
+    struct testlib_keyset keyset = testlib_init(cnt);
+    testlib_check_all(cache, keyset, testlib_order_affine);
+    testlib_check_all(cache, keyset, testlib_order_affine);
+    testlib_drop_all(cache, keyset);
+}
+
+struct core_full_report {
+    float full_hitrate;
+    float core_hitrate;
+    uint64_t core_latency_ms;
+    uint64_t full_latency_ms;
+};
+
+struct core_full_report collect_core_full_report(struct fallthrough_cache* cache, 
+    struct testlib_keyset* core_set, struct testlib_keyset* full_set) {
+    struct core_full_report report;
+    struct timespec start, end;
+    
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    report.full_hitrate = testlib_check_all(cache, *full_set, testlib_order_random);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    report.full_latency_ms = (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1e6;
+    
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    report.core_hitrate = testlib_check_all(cache, *core_set, testlib_order_random);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    report.core_latency_ms = (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1e6;
+    
+    return report;
+}
+
+void print_core_full_report(struct core_full_report report, const char* prefix) {
+    printf("%s_full_hitrate=%.2f\n", prefix, report.full_hitrate);
+    printf("%s_full_latency_ms=%zu\n", prefix, report.full_latency_ms);
+    printf("%s_core_hitrate=%.2f\n", prefix, report.core_hitrate);
+    printf("%s_core_latency_ms=%zu\n", prefix, report.core_latency_ms);
+}
+
+struct benchmark_report {
+    struct core_full_report before;
+    struct core_full_report after;
+
+    float reclaim_latency;
+};
+
+
+
+struct benchmark_report run_core_and_full(struct fallthrough_cache* cache, size_t size, bool reclaim) {
+    size_t core_size = 128 * M;
+    size_t full_size = (size - core_size) - 1*M;
+    printf("Core size: %zuMb, full size: %zuMb\n", core_size/M, full_size/M);
+    struct testlib_keyset core_set = testlib_init(core_size/PAGE_SIZE);
+    struct testlib_keyset full_set = testlib_init(full_size/PAGE_SIZE);
+
+    struct benchmark_report report;
+
+    int factor = 4;
+    int attempts = 2;
+    printf("Starting warmup %d times, core set is %dx likely\n", attempts, factor);
+    for (int i = 0; i < attempts; ++i) {
+        printf("Full %d: ", i);
+        testlib_check_all(cache, full_set, testlib_order_affine);
+
+        for (int j = 0; j < factor; ++j) {
+            printf("Core %d: ", i);
+            testlib_check_all(cache, core_set, testlib_order_affine);
+        }
+    }
+
+    report.before = collect_core_full_report(cache, &core_set, &full_set);
+    
+    sleep(1);
+    
+    if (reclaim) {
+        struct timespec start, end;
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        testlib_reclaim_many(12, size/16);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        report.reclaim_latency = (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1e6;
+    }
+
+    sleep(1);
+
+    report.after = collect_core_full_report(cache, &core_set, &full_set);
+
+    // printf("\nStarting final check %d times, core is %dx\n", attempts, factor);
+    // for (int i = 0; i < attempts; ++i) {
+    //     for (int j = 0; j < factor; ++j) {
+    //         printf("Core %d: ", i);
+    //         testlib_check_all(cache, core_set, testlib_order_affine);
+    //     }
+    //     printf("Full %d: ", i);
+    //     testlib_check_all(cache, full_set, testlib_order_affine);
+    // }
+
+
+    testlib_drop_all(cache, core_set);
+    testlib_drop_all(cache, full_set);
+
+    return report;
+}
+
+int main(int argc, char** argv) {
+    if (argc < 4) {
+        printf("Usage: %s <impl> <memory_size_gb> <cache_size_factor>\n", argv[0]);       
+        printf("Impls: lazyfree, normal, disk\n");
+        return 1;
+    }
+    size_t memory_size = atoll(argv[2]);
+    if (memory_size < 1) {
+        printf("Memory size must be at least 1Gb\n");
+        return 1;
+    }
+    size_t cache_size = memory_size * G;
+
+    float cache_size_factor = strtof(argv[3], NULL);
+    if (cache_size_factor <= 0) {
+        printf("Cache size factor must be positive\n");
+        return 1;
+    }
+
+    struct cache_impl impl = lazyfree_cache_impl;
+    if (strcmp(argv[1], "lazyfree") == 0) {
+        
+    } else if (strcmp(argv[1], "disk") == 0) {
+        impl.mmap_impl = mmap_file;
+        impl.madv_impl = madv_cold;
+    } else if (strcmp(argv[1], "normal") == 0) {
+        impl.madv_impl = madv_noop;
+    } else {
+        printf("Unknown impl: %s\n", argv[1]);
+        return 1;
+    }
+
+    random_rotate();
+
+    printf("\n== Benchmark: %s, cache_size=%zu GB ==\n", argv[1], cache_size/G);
+    struct fallthrough_cache* cache = fallthrough_cache_new(impl,
+                                            cache_size*cache_size_factor,
+                                            sizeof(uint64_t),
+                                            1,
+                                            refill_cb);
+    // run_full_set(cache, cache_size);
+    struct benchmark_report report = run_core_and_full(cache, cache_size, true);
+    printf("\n== Report ==\n");
+    printf("impl=%s\n", argv[1]);
+    printf("cache_size_gb=%zu\n", cache_size/G);
+    print_core_full_report(report.before, "before");
+
+    printf("reclaim_latency=%.2f ms\n", report.reclaim_latency);
+    
+    print_core_full_report(report.after, "after");
+
+
+    fallthrough_cache_free(cache);
+}
+
+
+
+
+
+
 
 // #define SUBSET_ITERATIONS 10
 // #define SUBSET_CNT 16
@@ -262,7 +437,3 @@
     
 //     madv_cache_free(&cache);
 // }
-
-int main(int argc, char* argv[]) {
-    return 0;
-}

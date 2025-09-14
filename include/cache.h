@@ -56,6 +56,7 @@ void *mmap_normal(size_t size);
 void *mmap_file(size_t size);
 
 void madv_lazyfree(void *memory, size_t size);
+void madv_cold(void *memory, size_t size);
 void madv_noop(void *memory, size_t size);
 
 

@@ -18,7 +18,7 @@
 // #define DEBUG_KEY -1ul
 
 
-#define NUMBER_OF_CHUNKS 16
+#define NUMBER_OF_CHUNKS 8
 static_assert(NUMBER_OF_CHUNKS < (1 << 8), "Too many chunks");
 
 // This guarantees we switch chunks < 50% of the writes
@@ -269,10 +269,10 @@ static void drop_random_chunk(struct lazyfree_cache* cache) {
     cache->current_chunk_idx = random_next() % NUMBER_OF_CHUNKS;
     struct chunk* chunk = &cache->chunks[cache->current_chunk_idx];
 
-    // if (cache->verbose) {
+    if (cache->verbose) {
         printf("DEBUG: Dropping chunk %zu\n", cache->current_chunk_idx);
-        // lazyfree_cache_debug(cache, false);
-    // }
+        lazyfree_cache_debug(cache, false);
+    }
     for (size_t i = 0; i < chunk->len; ++i) {
         hmap_remove(cache, chunk->keys[i]);
     }

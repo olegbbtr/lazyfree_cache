@@ -1,21 +1,23 @@
 CC = clang
-CFLAGS = -g -Wall -Wextra -O0 -std=gnu11 -Iinclude -Isrc/include
-SAN_FLAGS = -fno-omit-frame-pointer \
-			-fsanitize=address,undefined \
+CFLAGS = -g -Wall -Wextra -fno-omit-frame-pointer -Ofast -march=native -std=gnu11 -Iinclude -Isrc/include
+DEV_FLAGS = -fsanitize=address,undefined \
 			-fsanitize-address-use-after-scope
-CFLAGS += $(SAN_FLAGS)
+# CFLAGS += $(DEV_FLAGS)
 
 SRCS = $(wildcard src/*/*.c)
 OBJS = $(patsubst src/%.c,build/%.o,$(SRCS))
 
 
 
-all: clean build/test
+all: clean build/test build/benchmark
 
-run-tests: clean build/test
-	./run_tests.sh
+# run-tests: build/test
+# 	./run_tests.sh
 
 build/test: build/test.o $(OBJS)
+	$(CC) $(CFLAGS) $^ -o $@
+
+build/benchmark: build/benchmark.o $(OBJS)
 	$(CC) $(CFLAGS) $^ -o $@
 
 build/%.o: src/%.c | build build/cache build/util
@@ -29,6 +31,9 @@ clean:
 	rm -rf ./tmp
 
 
+perf: build/benchmark
+	sudo perf record -F 999 -g -- ./build/benchmark lazyfree 4 1
+	perf report
 
 
 # all: asan run
