@@ -150,3 +150,9 @@ Can be made multithread safe with RWLock semantics, if our hashmap would support
 
 
 Fallthrough cache should be able to pack multiple entries into a single page.
+
+
+TODO:
+ - support reading from writing lock
+ - support try read
+ - support LRU on chunks

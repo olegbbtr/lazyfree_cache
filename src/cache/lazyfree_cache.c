@@ -82,7 +82,7 @@ static struct lazyfree_cache* cache_new(size_t cache_capacity, mmap_impl_t mmap_
     cache->pages_per_chunk = cache->chunk_size / PAGE_SIZE;
     
     printf("Initiating cache\n");
-    printf("Cache capacity: %zuGb\n", cache_capacity/G);
+    printf("Cache capacity: %zuMb\n", cache_capacity/M);
     // printf("Total pages: %zuK\n", NUMBER_OF_CHUNKS * cache->pages_per_chunk/K);
     // printf("Chunk size: %zuMb\n", cache->chunk_size/M);
     // printf("Pages per chunk: %zu\n", cache->pages_per_chunk);
@@ -268,11 +268,11 @@ static void cache_read_unlock(struct lazyfree_cache* cache, bool drop) {
 static void drop_random_chunk(struct lazyfree_cache* cache) {
     cache->current_chunk_idx = random_next() % NUMBER_OF_CHUNKS;
     struct chunk* chunk = &cache->chunks[cache->current_chunk_idx];
-
-    if (cache->verbose) {
-        printf("DEBUG: Dropping chunk %zu\n", cache->current_chunk_idx);
+    printf("DEBUG: Dropping chunk %zu\n", cache->current_chunk_idx);
+        
+    // if (cache->verbose) {
         lazyfree_cache_debug(cache, false);
-    }
+    // }
     for (size_t i = 0; i < chunk->len; ++i) {
         hmap_remove(cache, chunk->keys[i]);
     }
@@ -483,13 +483,13 @@ void lazyfree_cache_unlock(cache_t cache, bool drop) {
 static void print_stats(cache_t cache) {
     struct lazyfree_cache* lazyfree_cache = (struct lazyfree_cache*) cache;
     printf("Htable size: %u\n", hashmap_num_entries(&lazyfree_cache->map));
-    // printf("Total free pages: %zu\n", lazyfree_cache->total_free_pages);
-    // for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
-    //     struct chunk* chunk = &lazyfree_cache->chunks[i];
-    //     float ratio = (float) chunk->free_pages_count / (float) chunk->len;
-    //     printf("Chunk %zu: %u/%u (%.2f%%)\n", i, chunk->free_pages_count, chunk->len, ratio * 100);
+    printf("Total free pages: %zu\n", lazyfree_cache->total_free_pages);
+    for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
+        struct chunk* chunk = &lazyfree_cache->chunks[i];
+        float ratio = (float) chunk->free_pages_count / (float) chunk->len;
+        printf("Chunk %zu: %u/%u (%.2f%%)\n", i, chunk->free_pages_count, chunk->len, ratio * 100);
        
-    // }
+    }
 }
 
 void lazyfree_cache_debug(cache_t cache, bool verbose) {
