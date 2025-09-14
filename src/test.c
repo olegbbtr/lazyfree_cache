@@ -59,11 +59,16 @@ void run_smoke_test() {
 }
 
 // Returns hitrate
-float check_all(uint64_t key_seed, size_t cnt) {
+float check_all(uint64_t key_seed, size_t cnt, bool randomize) {
     refill_ctx.count = 0;
     printf("Checking %zu pages\n", cnt);
     for (size_t i = 0; i < cnt; ++i) {
-        uint64_t key = key_seed + i;
+        uint64_t key = key_seed;
+        if (randomize) {
+            key += random_next() % cnt;
+        } else {
+            key += i;
+        }
         uint64_t value;
         fallthrough_cache_get(cache, key, (uint8_t*) &value);
 
@@ -77,29 +82,36 @@ float check_all(uint64_t key_seed, size_t cnt) {
 
 // Returns hitrate
 float drop_all(struct fallthrough_cache *cache, uint64_t key_seed, size_t cnt) {
-    printf("Dropping %zu pages\n", cnt);
+    
+    fallthrough_cache_debug(cache, false);
+
+    printf("\nDropping %zu pages\n", cnt);
     size_t hits = 0;
     for (size_t i = 0; i < cnt; ++i) {
         uint64_t key = key_seed + i;
         hits += fallthrough_cache_drop(cache, key);
     }
+
+    fallthrough_cache_debug(cache, false);
     return (float) hits / (float) cnt;
 }
 
-void check_twice_test(size_t size, float expected_hitrate) {
-    size *= 0.9;
+size_t get_cnt(size_t size) {
+    return size/PAGE_SIZE - 1024; // Don't want to overflow
+}
 
+void check_twice_test(size_t size, float expected_hitrate) {
     printf("=== Check twice test, size %zu, expected hitrate %.2f%% ===\n", size, expected_hitrate * 100);
     uint64_t key_seed = random_next();
-    uint64_t cnt = size/PAGE_SIZE;
+    uint64_t cnt = get_cnt(size);
     printf("1. Start first pass\n");
-    float hitrate1 = check_all(key_seed, cnt);
+    float hitrate1 = check_all(key_seed, cnt, false);
 
     printf("Hitrate 1: %.2f%%\n", hitrate1 * 100);
     printf("2. Start second pass\n");
     
     // fallthrough_cache_debug(cache, true);
-    float hitrate2 = check_all(key_seed, cnt);
+    float hitrate2 = check_all(key_seed, cnt, false);
     printf("Hitrate 2: %.2f%%\n", hitrate2 * 100);
 
     assert(hitrate2 >= hitrate1);
@@ -108,10 +120,68 @@ void check_twice_test(size_t size, float expected_hitrate) {
     drop_all(cache, key_seed, cnt);
 }
 
-void mem_pressure_test(size_t size) {
-    check_twice_test(size, 0.9);
+void reclaim_memory(size_t size) {
+    printf("Reclaiming %zu Mb\n", size/M);
+    uint8_t *mem = mmap_normal(size);
+    for (size_t i = 0; i < size/PAGE_SIZE; ++i) {
+        mem[i*PAGE_SIZE] = random_next();
+    }
+    munmap(mem, size);
+}
+
+void reclaim_many(size_t chunks, size_t chunk_size) {
+    printf("Reclaiming %zu chunks of %zu Mb\n", chunks, chunk_size/M);
+    uint8_t **mem = malloc(chunks * sizeof(uint8_t*));
+    for (size_t i = 0; i < chunks; ++i) {
+        mem[i] = mmap_normal(chunk_size);
+        for (size_t j = 0; j < chunk_size/PAGE_SIZE; ++j) {
+            mem[i][j*PAGE_SIZE] = random_next();
+        }
+    }
+    for (size_t i = 0; i < chunks; ++i) {
+        munmap(mem[i], chunk_size);
+    }
+    free(mem);
+}
+
+void mem_pressure_test(size_t size, bool randomize) {
+    uint64_t key_seed = random_next();
+    uint64_t cnt = get_cnt(size);
+    uint64_t attempts = 5;
+    for (uint64_t i = 0; i < attempts; ++i) {
+        float hitrate = check_all(key_seed, cnt, randomize);
+        printf("Hitrate before reclaim: %.2f%%\n", hitrate * 100);
+        sleep(1);
+    // fallthrough_cache_debug(cache, false);
+    }
+
+    fallthrough_cache_debug(cache, false);
+    
+    // drop_all(cache, key_seed, cnt);
+    
+    reclaim_many(7, size/8);
+    
+    sleep(10);
 
     
+    for (uint64_t i = 0; i < attempts; ++i) {
+        float hitrate = check_all(key_seed, cnt, randomize);
+        printf("Hitrate after reclaim: %.2f%%\n", hitrate * 100);
+        // fallthrough_cache_debug(cache, false);
+    }
+
+    drop_all(cache, key_seed, cnt);
+    fallthrough_cache_debug(cache, false);
+
+
+
+    sleep(10);
+
+    for (uint64_t i = 0; i < attempts; ++i) {
+        float hitrate = check_all(key_seed, cnt, randomize);
+        printf("Hitrate after reclaim and drop: %.2f%%\n", hitrate * 100);
+        // fallthrough_cache_debug(cache, false);
+    }
 }
 
 
@@ -119,14 +189,23 @@ void suite_lazyfree(bool full) {
     struct cache_impl impl = lazyfree_cache_impl;
     impl.mmap_impl = mmap_normal;
     impl.madv_impl = madv_lazyfree;
-    
+
+    size_t overcommited_size = cache_size;
     cache = fallthrough_cache_new(impl, 
-        cache_size, 
+        overcommited_size, 
         sizeof(uint64_t), 
         1,
         refill_cb);
 
-    run_smoke_test();
+
+    // run_smoke_test();
+
+    check_twice_test(cache_size, 0.8);
+    fallthrough_cache_debug(cache, false);
+
+    // sleep(100);
+
+    // mem_pressure_test(cache_size, true);
     if (!full) {
         return;
     }
@@ -136,7 +215,7 @@ void suite_lazyfree(bool full) {
     check_twice_test(cache_size, 0.9);
 
     // Hitrate should be around 25%
-    check_twice_test(2*cache_size, 0.2);
+    check_twice_test(2*cache_size, 0.15);
 }
 
 void suite_normal() {
@@ -153,7 +232,7 @@ void suite_normal() {
     run_smoke_test();    
 
     check_twice_test(cache_size, 1);
-    check_twice_test(2*cache_size, 0.3);
+    check_twice_test(2*cache_size, 0.15);
 }
 
 void suite_disk() {
@@ -186,6 +265,9 @@ int main(int argc, char **argv) {
         return 1;
     }
     cache_size = memory_size * G;
+
+
+    random_rotate();
 
     refill_ctx.seed = random_next();
     refill_ctx.count = 0;

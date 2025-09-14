@@ -1,14 +1,9 @@
-FROM gcc AS build
+FROM debian
 
-ADD src /src
+RUN apt-get update && apt-get install -y clang build-essential gdb
 
-WORKDIR /
+ADD . /app
 
-RUN gcc -Wno-unused-result -O3 -o main /src/main.c /src/madv_cache.c
+WORKDIR /app
 
-
-FROM busybox
-
-COPY --from=build /main /main
-
-ENTRYPOINT ["./main"]
+RUN make build/test

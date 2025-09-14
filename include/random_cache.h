@@ -20,7 +20,7 @@ bool random_cache_read_lock(cache_t cache,
 void random_cache_unlock(cache_t cache, bool drop);
 
 
-static bool noop_lock_check(cache_t cache) { return true; }
+static bool noop_lock_check(cache_t _) { return true; }
 
 
 static struct cache_impl random_cache_impl = {

@@ -14,8 +14,8 @@
 
 #include "lazyfree_cache.h"
 
-// #define DEBUG_KEY 6791897766761633777ul
-#define DEBUG_KEY -1ul
+#define DEBUG_KEY 1609906849761488ul
+// #define DEBUG_KEY -1ul
 
 
 #define NUMBER_OF_CHUNKS 16
@@ -40,7 +40,7 @@ struct entry_descriptor {
 
 struct chunk {
     struct discardable_entry* entries; // anonymous mmap size=CHUNK_SIZE
-    bitset_t bit0;              // malloc size=PAGES_PER_CHUNK/8 
+    bitset_t bit0;                     // malloc size=PAGES_PER_CHUNK/8 
     uint32_t* free_pages;              // malloc size=PAGES_PER_CHUNK
     cache_key_t* keys;                 // malloc size=PAGES_PER_CHUNK
     uint32_t free_pages_count;
@@ -152,7 +152,7 @@ static void hmap_put(struct lazyfree_cache* cache, cache_key_t* key, struct entr
 
 static void hmap_remove(struct lazyfree_cache* cache, cache_key_t key) {
     if (key == DEBUG_KEY) {
-        printf("DEBUG: HASHMAP REMOVE %lu\n", key);
+        printf("DEBUG: HASHMAP REMOVE %lu, new size %u\n", key, hashmap_num_entries(&cache->map));
     }
     hashmap_remove(&cache->map, &key, sizeof(key));
 }
@@ -277,6 +277,8 @@ static void drop_random_chunk(struct lazyfree_cache* cache) {
         hmap_remove(cache, chunk->keys[i]);
     }
     memset(chunk->keys, 0, chunk->len * sizeof(cache_key_t));
+    int ret = madvise(chunk->entries, chunk->len * sizeof(struct discardable_entry), MADV_DONTNEED);
+    assert(ret == 0);
     
     cache->total_free_pages += (chunk->len - chunk->free_pages_count);
     
@@ -295,7 +297,16 @@ static struct entry_descriptor alloc_current_chunk(struct lazyfree_cache* cache)
     struct chunk* chunk = &cache->chunks[cache->current_chunk_idx];
     struct entry_descriptor desc;
     desc.chunk = cache->current_chunk_idx;
-    
+
+    if (chunk->free_pages_count > 0 ) {
+        // We have free pages
+        uint32_t idx = chunk->free_pages[--chunk->free_pages_count];
+        desc.index = idx;
+
+        cache->total_free_pages--;
+        return desc;
+    }
+
     if (chunk->len < cache->pages_per_chunk) {
         // We have blank pages
         desc.index = chunk->len++;
@@ -304,20 +315,8 @@ static struct entry_descriptor alloc_current_chunk(struct lazyfree_cache* cache)
         return desc;
     }
     
-    if (chunk->free_pages_count == 0) {
-        // Nothing left in this chunk
-        return EMPTY_DESC;
-    }
-
-    if (cache->verbose) {
-        printf("Allocating from chunk %zu, index %u\n", cache->current_chunk_idx, chunk->free_pages_count);
-    }
-
-    uint32_t idx = chunk->free_pages[--chunk->free_pages_count];
-    desc.index = idx;
-
-    cache->total_free_pages--;
-    return desc;
+    // Nothing left in this chunk
+    return EMPTY_DESC;
 }
 
 
@@ -483,13 +482,14 @@ void lazyfree_cache_unlock(cache_t cache, bool drop) {
 // == Extra API ==
 static void print_stats(cache_t cache) {
     struct lazyfree_cache* lazyfree_cache = (struct lazyfree_cache*) cache;
-    printf("Total free pages: %zu\n", lazyfree_cache->total_free_pages);
-    for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
-        struct chunk* chunk = &lazyfree_cache->chunks[i];
-        float ratio = (float) chunk->free_pages_count / (float) chunk->len;
-        printf("Chunk %zu: %u/%u (%.2f%%)\n", i, chunk->free_pages_count, chunk->len, ratio * 100);
+    printf("Htable size: %u\n", hashmap_num_entries(&lazyfree_cache->map));
+    // printf("Total free pages: %zu\n", lazyfree_cache->total_free_pages);
+    // for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
+    //     struct chunk* chunk = &lazyfree_cache->chunks[i];
+    //     float ratio = (float) chunk->free_pages_count / (float) chunk->len;
+    //     printf("Chunk %zu: %u/%u (%.2f%%)\n", i, chunk->free_pages_count, chunk->len, ratio * 100);
        
-    }
+    // }
 }
 
 void lazyfree_cache_debug(cache_t cache, bool verbose) {

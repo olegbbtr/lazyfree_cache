@@ -5,6 +5,8 @@
 #define K 1024ul
 #define M (K*K)
 #define G (K*M)
+#define UNUSED(x) (void)(x)
+
 
 #ifndef CACHE_H
 #define CACHE_H

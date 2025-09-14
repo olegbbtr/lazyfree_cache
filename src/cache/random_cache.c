@@ -3,14 +3,15 @@
 
 typedef struct random_cache {
     void *arena;
-
+    cache_key_t last_key;
+    size_t key_offset;
 } random_cache;
 
 
 
-cache_t random_cache_new(size_t cache_size, mmap_impl_t mmap_impl, madv_impl_t madv_impl) {
+cache_t random_cache_new(size_t cache_size, mmap_impl_t mmap_impl, madv_impl_t _) {
     random_cache *cache = malloc(sizeof(random_cache));
-    cache->arena = mmap_impl(cache_size);\
+    cache->arena = mmap_impl(cache_size);
     return cache;
 }
 

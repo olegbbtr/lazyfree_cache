@@ -26,6 +26,7 @@ build build/cache build/util:
 
 clean:
 	rm -rf build
+	rm -rf ./tmp
 
 
 

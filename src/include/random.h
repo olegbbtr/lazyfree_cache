@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <time.h>
 
 #ifndef __random_h_
 #define __random_h_
@@ -10,11 +11,21 @@ static uint64_t random_mix(uint64_t *state) {
     return z ^ (z >> 31);
 }
 
-static uint64_t __global_seed = 1;
+static uint64_t __global_seed = 2;
+
 
 static uint64_t random_next(void) {
+    // if (__global_seed == 1) {
+    //     __global_seed = time(NULL);
+    // }
     __global_seed = random_mix(&__global_seed);
     return __global_seed ^ 0xdeadbeef; // So that we don't follow the same path every time
 }
+
+static void random_rotate() {
+    __global_seed = time(NULL);
+    random_next();
+}
+
 
 #endif
