@@ -142,9 +142,11 @@ int main(int argc, char **argv) {
         run_smoke_test(cache);
     } else if (strcmp(argv[3], "check_twice") == 0) {
         run_check_twice_test(cache, memory_size * G, 0.9);
-        fallthrough_cache_debug(cache, false);
-        run_check_twice_test(cache, memory_size * G, 0.9);
-    } else {
+    } else if (strcmp(argv[3], "check_twicex2") == 0) {
+        run_check_twice_test(cache, 2*memory_size * G, 0.2);
+    }  
+    
+    else {
         printf("Unknown suite: %s\n", argv[3]);
         return 1;
     }

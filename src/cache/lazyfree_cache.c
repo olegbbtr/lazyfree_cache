@@ -6,7 +6,8 @@
 #include <stdio.h>
 #include <sys/mman.h>
 
-#include "stb_ds.h"
+// #include "stb_ds.h"
+#include "hashmap.h"
 
 #include "bitset.h"
 #include "random.h"
@@ -31,6 +32,8 @@ static_assert(sizeof(struct discardable_entry) == PAGE_SIZE, "Discardable entry 
 struct entry_descriptor {
     uint32_t index;
     int8_t chunk;
+    bool set;
+    uint16_t padding;
 };
 
 struct chunk {
@@ -50,7 +53,7 @@ struct lazyfree_cache {
     size_t current_chunk_idx;
     struct chunk chunks[NUMBER_OF_CHUNKS];
 
-    struct { uint64_t key; struct entry_descriptor value; } *map; 
+    struct hashmap_s map; 
 
     size_t total_free_pages;
 
@@ -102,8 +105,8 @@ static struct lazyfree_cache* cache_new(size_t cache_capacity) {
         assert(cache->chunks[i].keys != NULL);
     }
     cache->total_free_pages = NUMBER_OF_CHUNKS * cache->pages_per_chunk;
-    hmdefault(cache->map, EMPTY_DESC);
     cache->locked_desc = EMPTY_DESC;
+    hashmap_create( NUMBER_OF_CHUNKS*cache->pages_per_chunk, &cache->map);
     return cache;
 }
 
@@ -111,10 +114,47 @@ void cache_free(struct lazyfree_cache* cache) {
     for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
         munmap(cache->chunks[i].entries, cache->chunk_size);
     }
-    hmfree(cache->map);
+    hashmap_destroy(&cache->map);
     free(cache);
 }
 
+// == Hashmap helpers ==
+union {
+    struct entry_descriptor desc;
+    void* ptr;
+} u;
+
+static struct entry_descriptor hmap_get(struct lazyfree_cache* cache, cache_key_t key) {
+    u.ptr = hashmap_get(&cache->map, &key, sizeof(key));
+    if (key == DEBUG_KEY) {
+        printf("DEBUG: HASHMAP GET %lu -> %d %d %d\n", key, u.desc.chunk, u.desc.index, u.desc.set);
+    }
+    if (u.desc.set) {
+        return u.desc;
+    }
+    return EMPTY_DESC;
+}
+
+static void hmap_put(struct lazyfree_cache* cache, cache_key_t* key, struct entry_descriptor desc) {
+    u.ptr = 0;
+    u.desc.chunk = desc.chunk;
+    u.desc.index = desc.index;
+    u.desc.set = 1;
+    if (*key == DEBUG_KEY) {
+        printf("DEBUG: HASHMAP PUT %lu -> %d %d %d\n", *key, desc.chunk, desc.index, desc.set);
+    }
+    hashmap_put(&cache->map, key, sizeof(*key), u.ptr);
+
+    struct entry_descriptor desc2 = hmap_get(cache, *key);
+    assert(desc2.set);
+}
+
+static void hmap_remove(struct lazyfree_cache* cache, cache_key_t key) {
+    if (key == DEBUG_KEY) {
+        printf("DEBUG: HASHMAP REMOVE %lu\n", key);
+    }
+    hashmap_remove(&cache->map, &key, sizeof(key));
+}
 
 // == Read lock implementation ==
 
@@ -134,10 +174,10 @@ static void cache_drop(struct lazyfree_cache* cache, struct entry_descriptor des
     // printf("DEBUG DROP key %lu\n", key);
 
     if (key == DEBUG_KEY) {
-        struct entry_descriptor desc2 = hmget(cache->map, key);
+        struct entry_descriptor desc2 = hmap_get(cache, key);
         printf("DEBUG: Dropping key %lu, chunk %d, index %d. Current %d, %d\n", key, desc.chunk, desc.index, desc2.chunk, desc2.index);
     }
-    hmdel(cache->map, key);
+    hmap_remove(cache, key);
 
     // printf("Hmap size: %zu\n", hmlen(cache->map));
 }
@@ -152,8 +192,7 @@ static bool cache_read_try_lock(struct lazyfree_cache* cache,
         printf("DEBUG: Locking key %lu for read\n", key);
     }
 
-    struct entry_descriptor desc = hmget(cache->map, key);
-
+    struct entry_descriptor desc = hmap_get(cache, key);
     if (key == DEBUG_KEY) {
         printf("DEBUG: Getting key %lu, chunk %d, index %d\n", key, desc.chunk, desc.index);
     }
@@ -233,7 +272,7 @@ static void drop_random_chunk(struct lazyfree_cache* cache) {
         // printf("DEBUG: Dropping chunk %zu\n", cache->current_chunk_idx);
     // }
     for (size_t i = 0; i < chunk->len; ++i) {
-        hmdel(cache->map, chunk->keys[i]);
+        hmap_remove(cache, chunk->keys[i]);
     }
     memset(chunk->keys, 0, chunk->len * sizeof(cache_key_t));
     
@@ -300,7 +339,7 @@ static bool cache_write_lock(struct lazyfree_cache* cache,
         printf("DEBUG: Locking key %lu for write\n", key);
     }
  
-    struct entry_descriptor desc = hmget(cache->map, key);
+    struct entry_descriptor desc = hmap_get(cache, key);
     if (key == DEBUG_KEY) {
         printf("DEBUG: Putting key %lu, chunk %d, index %d\n", key, desc.chunk, desc.index);
         // cache->verbose = true;
@@ -391,8 +430,8 @@ static void cache_write_unlock(struct lazyfree_cache* cache, bool drop) {
             printf("DEBUG: Putting key %lu, chunk %d, index %d\n", cache->last_key, cache->locked_desc.chunk, cache->locked_desc.index);
         }
 
-        hmput(cache->map, cache->last_key, cache->locked_desc);
         chunk->keys[cache->locked_desc.index] = cache->last_key;
+        hmap_put(cache, &chunk->keys[cache->locked_desc.index], cache->locked_desc);
     }
 
     cache->locked_desc = EMPTY_DESC;
