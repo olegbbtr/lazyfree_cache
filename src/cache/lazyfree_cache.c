@@ -10,12 +10,10 @@
 
 #include "bitset.h"
 #include "random.h"
-#include "test.h"
-
 
 #include "lazyfree_cache.h"
 
-#define DEBUG_KEY -1ul
+#define DEBUG_KEY 6791897766761619441ul
 
 #define NUMBER_OF_CHUNKS 16
 static_assert(NUMBER_OF_CHUNKS < (1 << 8), "Too many chunks");
@@ -66,7 +64,7 @@ struct lazyfree_cache {
 
 
 static_assert(sizeof(struct entry_descriptor) == 8, "entry_descriptor size is not 8 bytes");
-const static struct entry_descriptor EMPTY_DESC = { .chunk = -1, .index = -1 };
+static struct entry_descriptor EMPTY_DESC = { .chunk = -1, .index = -1 };
 
 static struct lazyfree_cache* cache_new(size_t cache_capacity) {
     struct lazyfree_cache* cache = malloc(sizeof(struct lazyfree_cache));
@@ -124,7 +122,15 @@ static void cache_drop(struct lazyfree_cache* cache, struct entry_descriptor des
     struct chunk* chunk = &cache->chunks[desc.chunk];
     cache_key_t key = chunk->keys[desc.index];
     chunk->free_pages[chunk->free_pages_count++] = desc.index;
+    if (chunk->free_pages_count > chunk->len) {
+        printf("DEBUG: Free pages count %u is greater than chunk len %u\n", chunk->free_pages_count, chunk->len);
+        lazyfree_cache_debug(cache, true);
+        exit(1);
+    }
     chunk->keys[desc.index] = 0;
+    
+    cache->total_free_pages++;
+
     hmdel(cache->map, key);
 }
 
@@ -163,12 +169,15 @@ static bool cache_read_try_lock(struct lazyfree_cache* cache,
         return false;
     }
 
+    if (chunk->keys[desc.index] != key) {
+        if (cache->verbose) {
+            printf("Key %lu was evicted by dropping the chunk\n", key);
+        }
+        return false;
+    }
+
     if (!bitset_get(chunk->bit0, desc.index)) {
-        // Move bit0 from bitset to head
-        printf("DEBUG: Moving bit0 from bitset to head\n");
         *head &= ~1ul;
-    } else {
-        // printf("DEBUG: Bit0 is already set\n");
     }
 
     *tail = entry->tail;
@@ -211,6 +220,17 @@ static void cache_read_unlock(struct lazyfree_cache* cache, bool drop) {
 static void drop_random_chunk(struct lazyfree_cache* cache) {
     cache->current_chunk_idx = random_next() % NUMBER_OF_CHUNKS;
     struct chunk* chunk = &cache->chunks[cache->current_chunk_idx];
+
+    // if (cache->verbose) {
+        printf("DEBUG: Dropping chunk %zu\n", cache->current_chunk_idx);
+    // }
+    for (size_t i = 0; i < chunk->len; ++i) {
+        hmdel(cache->map, chunk->keys[i]);
+    }
+    memset(chunk->keys, 0, chunk->len * sizeof(cache_key_t));
+    
+    cache->total_free_pages += (chunk->len - chunk->free_pages_count);
+    
     chunk->len = 0;
     chunk->free_pages_count = 0;
 }
@@ -218,6 +238,7 @@ static void drop_random_chunk(struct lazyfree_cache* cache) {
 static void advance_chunk(struct lazyfree_cache* cache) {
     int ret = madvise(cache->chunks[cache->current_chunk_idx].entries, 
         cache->chunk_size, MADV_FREE);
+
     assert(ret == 0);
 
     cache->current_chunk_idx = (cache->current_chunk_idx + 1) % NUMBER_OF_CHUNKS;
@@ -274,12 +295,18 @@ static bool cache_write_lock(struct lazyfree_cache* cache,
     struct entry_descriptor desc = hmget(cache->map, key);
     if (key == DEBUG_KEY) {
         printf("DEBUG: Putting key %lu, chunk %d, index %d\n", key, desc.chunk, desc.index);
+        // cache->verbose = true;
     }
     cache->last_key = key;
 
     if (desc.chunk != EMPTY_DESC.chunk) {
         if (cache->verbose) {
             printf("Found existing slot for key %lu\n", key);
+        }
+        struct chunk* chunk = &cache->chunks[desc.chunk];
+
+        if (!bitset_get(chunk->bit0, desc.index)) {
+            *cache->locked_head &= ~1ul;
         }
 
         take_write_lock(cache, desc, value);
@@ -315,6 +342,7 @@ static bool cache_write_lock(struct lazyfree_cache* cache,
         if (chunks_visited >= NUMBER_OF_CHUNKS) {
             // This means total_free_pages is not updated correctly
             printf("Failed to find free page\n");
+            lazyfree_cache_debug(cache, true);
             exit(1);
         }
     }
@@ -344,7 +372,7 @@ static void cache_write_unlock(struct lazyfree_cache* cache, bool drop) {
         *cache->locked_head |= 1;
 
         hmput(cache->map, cache->last_key, cache->locked_desc);
-        
+        chunk->keys[cache->locked_desc.index] = cache->last_key;
     }
 
     cache->locked_desc = EMPTY_DESC;
@@ -394,6 +422,7 @@ void lazyfree_cache_unlock(cache_t cache, bool drop) {
 // == Extra API ==
 static void print_stats(cache_t cache) {
     struct lazyfree_cache* lazyfree_cache = (struct lazyfree_cache*) cache;
+    printf("Total free pages: %zu\n", lazyfree_cache->total_free_pages);
     for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
         struct chunk* chunk = &lazyfree_cache->chunks[i];
         float ratio = (float) chunk->free_pages_count / (float) chunk->len;

@@ -381,7 +381,7 @@ static stbds_hash_index *stbds_make_hash_index(size_t slot_count, stbds_hash_ind
   t->used_count = 0;
   t->used_count_threshold        = slot_count*13/16; // if 12/16th of table is occupied, rebuild
   t->tombstone_count_threshold   = slot_count* 1/16; // if 14/16th of table is occupied+tombstones, rebuild
-  t->used_count_shrink_threshold = slot_count* 6/16; // if table is only 6/16th
+  t->used_count_shrink_threshold = slot_count* 1/16; // if table is only 6/16th
   if (ot) {
     t->string = ot->string;
     // reuse old seed so we can reuse old hashes so below "copy out old data" doesn't do any hashing

@@ -1,3 +1,2 @@
--std=c11
 -Iinclude
 -Isrc/include

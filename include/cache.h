@@ -2,6 +2,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#define K 1024ul
+#define M (K*K)
+#define G (K*M)
+
 #ifndef CACHE_H
 #define CACHE_H
 

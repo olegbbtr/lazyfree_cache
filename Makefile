@@ -1,24 +1,23 @@
 CC = clang
 CFLAGS = -g -Wall -Wextra -O0 -std=gnu11 -Iinclude -Isrc/include
 
-CACHE_SRCS = $(wildcard src/cache/*.c)
-CACHE_OBJS = $(patsubst src/cache/%.c,build/cache/%.o,$(CACHE_SRCS))
+SRCS = $(wildcard src/*/*.c)
+OBJS = $(patsubst src/%.c,build/%.o,$(SRCS))
 
-all: test
 
-test: build/test
-	./build/test lazyfree 4
 
-build/test: build/test.o $(CACHE_OBJS)
+all: run-tests
+
+run-tests: clean build/test
+	./run_tests.sh
+
+build/test: build/test.o $(OBJS)
 	$(CC) $^ -o $@
 
-build/%.o: src/%.c | build
+build/%.o: src/%.c | build build/cache build/util
 	$(CC) $(CFLAGS) -c $< -o $@
 
-build/cache/%.o: src/cache/%.c | build/cache
-	$(CC) $(CFLAGS) -c $< -o $@
-
-build build/cache:
+build build/cache build/util:
 	mkdir -p $@
 
 clean:

@@ -8,8 +8,6 @@
 #include <assert.h>
 #include <stdlib.h>
 
-#define STB_DS_IMPLEMENTATION
-#include "stb_ds.h"
 
 
 #include "fallthrough_cache.h"
@@ -19,73 +17,58 @@
 
 
 #include "random.h"
-#include "repopulate.h"
-#include "test.h"
+#include "refill.h"
 
-void test_smoke(struct fallthrough_cache *cache) {
-    struct repopulate_context ctx;
-    repopulate_init(&ctx, random_next());
-    fallthrough_cache_set_opaque(cache, &ctx);
-    
 
-    uint64_t seed_key = random_next();
+#define SMOKE_TEST_CNT 10
+void run_smoke_test(struct fallthrough_cache *cache) {
+    refill_ctx.count = 0;
 
-    #define SMOKE_TEST_CNT 10
-    uint64_t canonical_values[SMOKE_TEST_CNT];
+
+    uint64_t keys[SMOKE_TEST_CNT];
     for (size_t i = 0; i < SMOKE_TEST_CNT; ++i) {
-        uint64_t key = seed_key + i;
+        keys[i] = random_next() + i;
+        uint64_t value;
+        fallthrough_cache_get(cache, keys[i], (uint8_t*) &value);
 
-        printf("Getting key %lu\n", seed_key + i);
-        fallthrough_cache_get(cache, key, (uint8_t*) &canonical_values[i]);
-        assert(ctx.hits == i + 1);
+        // Refills one more time
+        assert(refill_ctx.count == i + 1);
     }
-
-    printf("\n finished pass 1\n");
 
     uint64_t values[SMOKE_TEST_CNT];
     for (size_t i = 0; i < SMOKE_TEST_CNT; ++i) {
-        printf("Getting key %lu\n", seed_key + i);
-        uint64_t key = seed_key + i;
-        fallthrough_cache_get(cache, key, (uint8_t*) &values[i]);
-        assert(values[i] == canonical_values[i]);
-        printf("Hits: %lu\n", ctx.hits);
-        assert(ctx.hits == 10);
+        fallthrough_cache_get(cache, keys[i], (uint8_t*) &values[i]);
+        if (values[i] != refill_expected(keys[i])) {
+            printf("Value %zu: %lu != expected %lu\n", i, values[i], refill_expected(keys[i]));
+            exit(1);
+        }
+        // Refill should not be called
+        assert(refill_ctx.count == 10);
     }
 
     for (size_t i = 0; i < SMOKE_TEST_CNT; ++i) {
-        uint64_t key = seed_key + i;
-        bool ok = fallthrough_cache_drop(cache, key);
+        bool ok = fallthrough_cache_drop(cache, keys[i]);
         assert(ok);
     }
+
+    assert(refill_ctx.count == 10);
 }
 
 // Returns hitrate
-float check_all(struct fallthrough_cache *cache, uint64_t key_seed, size_t size) {
-    struct repopulate_context ctx;
-    repopulate_init(&ctx, key_seed);
-    fallthrough_cache_set_opaque(cache, &ctx);
-
-    struct repopulate_context ctx_expected;
-    repopulate_init(&ctx_expected, key_seed);
-    
-
-    size_t cnt = size/ sizeof(uint64_t);
+float check_all(struct fallthrough_cache *cache, uint64_t key_seed, size_t cnt) {
+    refill_ctx.count = 0;
+    printf("Checking %zu pages\n", cnt);
     for (size_t i = 0; i < cnt; ++i) {
         uint64_t key = key_seed + i;
         uint64_t value;
         fallthrough_cache_get(cache, key, (uint8_t*) &value);
 
-        uint64_t expected;
-        repopulate_job(&ctx_expected, key, (uint8_t*) &expected);
-        if (value != expected) {
-            printf("Value %lu != expected %lu\n", value, expected);
+        if (value != refill_expected(key)) {
+            printf("Key %lu: Value %lu != expected %lu\n", key, value, refill_expected(key));
             exit(1);
         }
-        if (i % 100000 == 0) {
-            // printf("Checked %zu/%zu keys\n", i, cnt);
-        }
     }
-    return ((float) cnt - (float) ctx.hits) / (float) cnt;
+    return ((float) cnt - (float) refill_ctx.count) / (float) cnt;
 }
 
 // Returns hitrate
@@ -99,27 +82,27 @@ float drop_all(struct fallthrough_cache *cache, uint64_t key_seed, size_t size) 
     return (float) hits / (float) cnt;
 }
 
-void test_check_twice(struct fallthrough_cache *cache, uint64_t key_seed, size_t size) {
-    struct repopulate_context ctx;
-    repopulate_init(&ctx, key_seed);
-    fallthrough_cache_set_opaque(cache, &ctx);
-
-    float hitrate1 = check_all(cache, key_seed, size);
+void run_check_twice_test(struct fallthrough_cache *cache, size_t size, float expected_hitrate) {
+    uint64_t key_seed = random_next();
+    float hitrate1 = check_all(cache, key_seed, size/PAGE_SIZE);
 
     printf("Hitrate 1: %.2f%%\n", hitrate1 * 100);
     printf("\n== Start second pass ==\n");
-    fallthrough_cache_debug(cache, true);
-    repopulate_init(&ctx, key_seed);
-    float hitrate2 = check_all(cache, key_seed, size);
+    
+    // fallthrough_cache_debug(cache, true);
+    float hitrate2 = check_all(cache, key_seed, size/PAGE_SIZE);
     printf("Hitrate 2: %.2f%%\n", hitrate2 * 100);
 
     assert(hitrate2 > hitrate1);
+    assert(hitrate2 > expected_hitrate);
+
+    drop_all(cache, key_seed, size);
 }
 
 
 int main(int argc, char **argv) {
-    if (argc < 3) {
-        printf("Usage: %s <impl> <memory_size_gb>\n", argv[0]);
+    if (argc < 4) {
+        printf("Usage: %s <impl> <memory_size_gb> <suite>\n", argv[0]);
         printf("Impls: \n");
         printf("  lazyfree\n");
         printf("  random\n");
@@ -142,17 +125,36 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    refill_ctx.seed = random_next();
+    refill_ctx.count = 0;
+    
     struct fallthrough_cache *cache = fallthrough_cache_new(impl, 
         memory_size * G, 
         sizeof(uint64_t), 
-        repopulate_job);
-    // fallthrough_cache_debug(cache, true);
-    // test_smoke(cache);
-    // test_check_twice(cache, random_next(), 512 * K);
+        1,
+        refill_cb);
 
-    test_check_twice(cache, random_next(), 8 * M);
+    // fallthrough_cache_debug(cache, true);
+
+    if (strcmp(argv[3], "smoke") == 0) {
+        run_smoke_test(cache);
+    } else if (strcmp(argv[3], "check_twice") == 0) {
+        run_check_twice_test(cache, memory_size * G, 0.9);
+
+        run_check_twice_test(cache, memory_size * G, 0.4);
+    } else {
+        printf("Unknown suite: %s\n", argv[3]);
+        return 1;
+    }
     fallthrough_cache_free(cache);
-    // run_smoke_test();
+
+
+    return 0;
+
+
+    // test_check_twice(cache, random_next(), 8 * M);
+    // fallthrough_cache_free(cache);
+
     // run_put_get_tests(1, 100 * M);
     // run_put_get_tests(5, 4 * G);
     // run_ladder_test(true, false);
@@ -170,5 +172,4 @@ int main(int argc, char **argv) {
     // run_put_get_tests(1, 100*1000);
     // run_put_get_tests(10, 1000*1000);
     // run_flush_then_small_test();
-    return 0;
 }

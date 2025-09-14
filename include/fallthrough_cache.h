@@ -10,9 +10,7 @@ struct fallthrough_cache {
 
     void *cache;
 
-    bitset_t present;
-    struct{ uint64_t key; uint64_t value; } *page_bitset_offset;
-    size_t current_bitset_offset;
+    struct indirect_bitset present;
 
     size_t hits;
     size_t misses;
@@ -22,6 +20,7 @@ struct fallthrough_cache {
 struct fallthrough_cache* fallthrough_cache_new(struct cache_impl impl, 
                                                 size_t cache_size,
                                                 size_t entry_size,
+                                                size_t entries_per_page,
                                                 void (*repopulate)(void *opaque, uint64_t key, uint8_t *value));
 
 void fallthrough_cache_set_opaque(struct fallthrough_cache* cache, void *opaque);
