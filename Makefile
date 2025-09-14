@@ -1,18 +1,22 @@
 CC = clang
 CFLAGS = -g -Wall -Wextra -O0 -std=gnu11 -Iinclude -Isrc/include
+SAN_FLAGS = -fno-omit-frame-pointer \
+			-fsanitize=address,undefined \
+			-fsanitize-address-use-after-scope
+CFLAGS += $(SAN_FLAGS)
 
 SRCS = $(wildcard src/*/*.c)
 OBJS = $(patsubst src/%.c,build/%.o,$(SRCS))
 
 
 
-all: run-tests
+all: clean build/test
 
 run-tests: clean build/test
 	./run_tests.sh
 
 build/test: build/test.o $(OBJS)
-	$(CC) $^ -o $@
+	$(CC) $(CFLAGS) $^ -o $@
 
 build/%.o: src/%.c | build build/cache build/util
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -25,10 +29,7 @@ clean:
 
 
 
-# CFLAGS_ASAN := $(CFLAGS) \
-#  				-fno-omit-frame-pointer \
-#  				-fsanitize=address,undefined \
-#  				-fsanitize-address-use-after-scope
+
 # all: asan run
 
 # main: src/main.c src/madv_cache.c src/madv_cache.h

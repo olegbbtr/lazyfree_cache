@@ -6,14 +6,11 @@
 
 #include "fallthrough_cache.h"
 
-
-#include "stb_ds.h"
-
 struct fallthrough_cache* fallthrough_cache_new(struct cache_impl impl, 
                                                 size_t cache_size,
                                                 size_t entry_size,
                                                 size_t entries_per_page,
-                                                void (*repopulate)(void *opaque, uint64_t key, uint8_t *value)) {
+                                                refill_cb_t refill_cb) {
     if (entries_per_page != 1) {
         fprintf(stderr, "Only one entry per page supported\n");
         abort();
@@ -25,7 +22,7 @@ struct fallthrough_cache* fallthrough_cache_new(struct cache_impl impl,
     cache->impl = impl;
     cache->entry_size = entry_size;
     cache->entries_per_page = entries_per_page;
-    cache->repopulate = repopulate;
+    cache->refill_cb = refill_cb;
     cache->opaque = NULL;
 
     size_t entries = cache_size / PAGE_SIZE * entries_per_page;
@@ -52,6 +49,9 @@ static void put(struct fallthrough_cache* cache,
                 uint8_t *value) {
     uint64_t page_key = key / cache->entries_per_page;
     uint64_t page_offset = key % cache->entries_per_page;
+    if (cache->verbose) {
+        printf("\nFALLTHROUGH PUT: %zu %zu %p, %zu\n", page_key, page_offset, value, cache->entry_size);
+    }
     
     uint8_t *page;
 
@@ -113,7 +113,7 @@ void fallthrough_cache_get(struct fallthrough_cache* cache, uint64_t key, uint8_
         // printf("FALLTHROUGH GET OK: %zu %zu\n", page_key, page_offset);
         return;
     }
-    cache->repopulate(cache->opaque, key, value);
+    cache->refill_cb(cache->opaque, key, value);
     put(cache, key, value);
 }
 

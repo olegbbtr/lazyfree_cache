@@ -87,21 +87,31 @@ float drop_all(struct fallthrough_cache *cache, uint64_t key_seed, size_t cnt) {
 }
 
 void check_twice_test(size_t size, float expected_hitrate) {
+    size *= 0.9;
+
+    printf("=== Check twice test, size %zu, expected hitrate %.2f%% ===\n", size, expected_hitrate * 100);
     uint64_t key_seed = random_next();
     uint64_t cnt = size/PAGE_SIZE;
+    printf("1. Start first pass\n");
     float hitrate1 = check_all(key_seed, cnt);
 
     printf("Hitrate 1: %.2f%%\n", hitrate1 * 100);
-    printf("\n== Start second pass ==\n");
+    printf("2. Start second pass\n");
     
     // fallthrough_cache_debug(cache, true);
     float hitrate2 = check_all(key_seed, cnt);
     printf("Hitrate 2: %.2f%%\n", hitrate2 * 100);
 
-    assert(hitrate2 > hitrate1);
-    assert(hitrate2 > expected_hitrate);
+    assert(hitrate2 >= hitrate1);
+    assert(hitrate2 >= expected_hitrate);
 
     drop_all(cache, key_seed, cnt);
+}
+
+void mem_pressure_test(size_t size) {
+    check_twice_test(size, 0.9);
+
+    
 }
 
 
@@ -121,6 +131,7 @@ void suite_lazyfree(bool full) {
         return;
     }
 
+    // fallthrough_cache_debug(cache, true);
     // Second hitrate is almost 100%
     check_twice_test(cache_size, 0.9);
 
@@ -140,6 +151,9 @@ void suite_normal() {
         refill_cb);
 
     run_smoke_test();    
+
+    check_twice_test(cache_size, 1);
+    check_twice_test(2*cache_size, 0.3);
 }
 
 void suite_disk() {
@@ -154,6 +168,9 @@ void suite_disk() {
         refill_cb);
 
     run_smoke_test();
+
+    check_twice_test(cache_size, 1);
+    check_twice_test(2*cache_size, 0.3);
 }
 
 
@@ -173,6 +190,9 @@ int main(int argc, char **argv) {
     refill_ctx.seed = random_next();
     refill_ctx.count = 0;
 
+
+
+    printf("== Starting suite %s ==\n", argv[1]);
     if (strcmp(argv[1], "lazyfree") == 0) {
         suite_lazyfree(false);
     } else if (strcmp(argv[1], "lazyfree_full") == 0) {

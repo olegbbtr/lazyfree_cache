@@ -14,7 +14,9 @@
 
 #include "lazyfree_cache.h"
 
-#define DEBUG_KEY 6791897766761633777ul
+// #define DEBUG_KEY 6791897766761633777ul
+#define DEBUG_KEY -1ul
+
 
 #define NUMBER_OF_CHUNKS 16
 static_assert(NUMBER_OF_CHUNKS < (1 << 8), "Too many chunks");
@@ -46,6 +48,7 @@ struct chunk {
 };
 
 struct lazyfree_cache {
+    madv_impl_t madv_impl;
     size_t cache_capacity;
     size_t pages_per_chunk;
     size_t chunk_size;
@@ -69,19 +72,20 @@ struct lazyfree_cache {
 static_assert(sizeof(struct entry_descriptor) == 8, "entry_descriptor size is not 8 bytes");
 static struct entry_descriptor EMPTY_DESC = { .chunk = -1, .index = -1 };
 
-static struct lazyfree_cache* cache_new(size_t cache_capacity, void* (*mmap_impl)(size_t size), void (*madv_impl)(void *memory, size_t size)) {
+static struct lazyfree_cache* cache_new(size_t cache_capacity, mmap_impl_t mmap_impl, madv_impl_t madv_impl) {
     struct lazyfree_cache* cache = malloc(sizeof(struct lazyfree_cache));
     memset(cache, 0, sizeof(struct lazyfree_cache));
 
+    cache->madv_impl = madv_impl;
     cache->cache_capacity = cache_capacity;
     cache->chunk_size = cache_capacity / NUMBER_OF_CHUNKS;
     cache->pages_per_chunk = cache->chunk_size / PAGE_SIZE;
     
-    printf("\nInitiating cache\n");
+    printf("Initiating cache\n");
     printf("Cache capacity: %zuGb\n", cache_capacity/G);
-    printf("Total pages: %zuK\n", NUMBER_OF_CHUNKS * cache->pages_per_chunk/K);
-    printf("Chunk size: %zuMb\n", cache->chunk_size/M);
-    printf("Pages per chunk: %zu\n", cache->pages_per_chunk);
+    // printf("Total pages: %zuK\n", NUMBER_OF_CHUNKS * cache->pages_per_chunk/K);
+    // printf("Chunk size: %zuMb\n", cache->chunk_size/M);
+    // printf("Pages per chunk: %zu\n", cache->pages_per_chunk);
     printf("\n");
     for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
         // Allocate all the chunks on the start
@@ -107,6 +111,9 @@ static struct lazyfree_cache* cache_new(size_t cache_capacity, void* (*mmap_impl
 void cache_free(struct lazyfree_cache* cache) {
     for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
         munmap(cache->chunks[i].entries, cache->chunk_size);
+        bitset_free(cache->chunks[i].bit0);
+        free(cache->chunks[i].free_pages);
+        free(cache->chunks[i].keys);
     }
     hashmap_destroy(&cache->map);
     free(cache);
@@ -263,7 +270,8 @@ static void drop_random_chunk(struct lazyfree_cache* cache) {
     struct chunk* chunk = &cache->chunks[cache->current_chunk_idx];
 
     // if (cache->verbose) {
-        // printf("DEBUG: Dropping chunk %zu\n", cache->current_chunk_idx);
+        printf("DEBUG: Dropping chunk %zu\n", cache->current_chunk_idx);
+        // lazyfree_cache_debug(cache, false);
     // }
     for (size_t i = 0; i < chunk->len; ++i) {
         hmap_remove(cache, chunk->keys[i]);
@@ -277,11 +285,7 @@ static void drop_random_chunk(struct lazyfree_cache* cache) {
 }
 
 static void advance_chunk(struct lazyfree_cache* cache) {
-    int ret = madvise(cache->chunks[cache->current_chunk_idx].entries, 
-        cache->chunk_size, MADV_FREE);
-
-    assert(ret == 0);
-
+    cache->madv_impl(cache->chunks[cache->current_chunk_idx].entries, cache->chunk_size);
     cache->current_chunk_idx = (cache->current_chunk_idx + 1) % NUMBER_OF_CHUNKS;
 
     // printf("DEBUG: Switched to chunk %zu\n", cache->current_chunk_idx);
@@ -305,7 +309,11 @@ static struct entry_descriptor alloc_current_chunk(struct lazyfree_cache* cache)
         return EMPTY_DESC;
     }
 
-    uint32_t idx = chunk->free_pages[chunk->free_pages_count--];
+    if (cache->verbose) {
+        printf("Allocating from chunk %zu, index %u\n", cache->current_chunk_idx, chunk->free_pages_count);
+    }
+
+    uint32_t idx = chunk->free_pages[--chunk->free_pages_count];
     desc.index = idx;
 
     cache->total_free_pages--;

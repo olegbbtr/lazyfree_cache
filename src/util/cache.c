@@ -42,9 +42,8 @@ void *mmap_file(size_t size) {
 }
 
 void madv_lazyfree(void *memory, size_t size) {
-    int ret = madvise(memory, size, MADV_DONTNEED);
+    int ret = madvise(memory, size, MADV_FREE);
     assert(ret == 0);
 }
 
-void madv_noop(void *memory, size_t size) {
-}
+void madv_noop(void *memory, size_t size) { }

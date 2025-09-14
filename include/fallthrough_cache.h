@@ -1,11 +1,14 @@
 #include "cache.h"
 #include "bitset.h"
 
+
+typedef void (*refill_cb_t)(void *opaque, uint64_t key, uint8_t *value);
+
 struct fallthrough_cache {
     struct cache_impl impl;
     uint64_t entry_size;
     size_t entries_per_page;
-    void (*repopulate)(void *opaque, uint64_t key, uint8_t *value);
+    refill_cb_t refill_cb;
     void *opaque;
 
     void *cache;
@@ -21,7 +24,7 @@ struct fallthrough_cache* fallthrough_cache_new(struct cache_impl impl,
                                                 size_t cache_size,
                                                 size_t entry_size,
                                                 size_t entries_per_page,
-                                                void (*repopulate)(void *opaque, uint64_t key, uint8_t *value));
+                                                refill_cb_t refill_cb);
 
 void fallthrough_cache_set_opaque(struct fallthrough_cache* cache, void *opaque);
 
