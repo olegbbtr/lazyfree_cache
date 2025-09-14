@@ -13,7 +13,7 @@
 
 #include "lazyfree_cache.h"
 
-#define DEBUG_KEY 6791897766761619441ul
+#define DEBUG_KEY 6791897766761633777ul
 
 #define NUMBER_OF_CHUNKS 16
 static_assert(NUMBER_OF_CHUNKS < (1 << 8), "Too many chunks");
@@ -119,6 +119,7 @@ void cache_free(struct lazyfree_cache* cache) {
 // == Read lock implementation ==
 
 static void cache_drop(struct lazyfree_cache* cache, struct entry_descriptor desc) {
+    // printf("DEBUG: Dropping chunk %d, index %d\n", desc.chunk, desc.index);
     struct chunk* chunk = &cache->chunks[desc.chunk];
     cache_key_t key = chunk->keys[desc.index];
     chunk->free_pages[chunk->free_pages_count++] = desc.index;
@@ -130,8 +131,15 @@ static void cache_drop(struct lazyfree_cache* cache, struct entry_descriptor des
     chunk->keys[desc.index] = 0;
     
     cache->total_free_pages++;
+    // printf("DEBUG DROP key %lu\n", key);
 
+    if (key == DEBUG_KEY) {
+        struct entry_descriptor desc2 = hmget(cache->map, key);
+        printf("DEBUG: Dropping key %lu, chunk %d, index %d. Current %d, %d\n", key, desc.chunk, desc.index, desc2.chunk, desc2.index);
+    }
     hmdel(cache->map, key);
+
+    // printf("Hmap size: %zu\n", hmlen(cache->map));
 }
 
 static bool cache_read_try_lock(struct lazyfree_cache* cache, 
@@ -222,7 +230,7 @@ static void drop_random_chunk(struct lazyfree_cache* cache) {
     struct chunk* chunk = &cache->chunks[cache->current_chunk_idx];
 
     // if (cache->verbose) {
-        printf("DEBUG: Dropping chunk %zu\n", cache->current_chunk_idx);
+        // printf("DEBUG: Dropping chunk %zu\n", cache->current_chunk_idx);
     // }
     for (size_t i = 0; i < chunk->len; ++i) {
         hmdel(cache->map, chunk->keys[i]);
@@ -300,7 +308,7 @@ static bool cache_write_lock(struct lazyfree_cache* cache,
     cache->last_key = key;
 
     if (desc.chunk != EMPTY_DESC.chunk) {
-        if (cache->verbose) {
+        if (cache->verbose || key == DEBUG_KEY) {
             printf("Found existing slot for key %lu\n", key);
         }
         struct chunk* chunk = &cache->chunks[desc.chunk];
@@ -315,13 +323,13 @@ static bool cache_write_lock(struct lazyfree_cache* cache,
 
     
     if (cache->total_free_pages < MIN_FREE_TOTAL_PAGES) {
-        if (cache->verbose) {
+        if (cache->verbose || key == DEBUG_KEY) {
             printf("No free pages, freeing up random chunk\n");
         }
         drop_random_chunk(cache);
     }
 
-    if (cache->verbose) {
+    if (cache->verbose || key == DEBUG_KEY) {
         printf("Allocating from the current chunk\n");
     }
 
@@ -335,7 +343,7 @@ static bool cache_write_lock(struct lazyfree_cache* cache,
 
         advance_chunk(cache);
 
-        if (cache->verbose) {
+        if (cache->verbose || key == DEBUG_KEY) {
             printf("Advanced to chunk %zu\n", cache->current_chunk_idx);
         }
         chunks_visited++;
@@ -347,6 +355,10 @@ static bool cache_write_lock(struct lazyfree_cache* cache,
         }
     }
 
+    if (cache->verbose || key == DEBUG_KEY) {
+        printf("Allocated from chunk %d, index %d\n", desc.chunk, desc.index);
+    }
+
     take_write_lock(cache, desc, value);
     return true;
 }
@@ -355,6 +367,10 @@ static void cache_write_unlock(struct lazyfree_cache* cache, bool drop) {
     assert(cache->locked_desc.chunk != EMPTY_DESC.chunk);
     assert(cache->locked_head != NULL);
     assert(!cache->locked_read);
+
+    if (cache->verbose || cache->last_key == DEBUG_KEY) {
+        printf("DEBUG: Unlocking key write %lu, drop %d\n", cache->last_key, drop);
+    }
 
     if (drop) {
         cache_drop(cache, cache->locked_desc);
@@ -370,6 +386,10 @@ static void cache_write_unlock(struct lazyfree_cache* cache, bool drop) {
             } 
         }
         *cache->locked_head |= 1;
+
+        if (cache->verbose || cache->last_key == DEBUG_KEY) {
+            printf("DEBUG: Putting key %lu, chunk %d, index %d\n", cache->last_key, cache->locked_desc.chunk, cache->locked_desc.index);
+        }
 
         hmput(cache->map, cache->last_key, cache->locked_desc);
         chunk->keys[cache->locked_desc.index] = cache->last_key;

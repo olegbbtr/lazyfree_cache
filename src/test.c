@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <sys/types.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <string.h>
@@ -72,8 +73,8 @@ float check_all(struct fallthrough_cache *cache, uint64_t key_seed, size_t cnt) 
 }
 
 // Returns hitrate
-float drop_all(struct fallthrough_cache *cache, uint64_t key_seed, size_t size) {
-    size_t cnt = size/ sizeof(uint64_t);
+float drop_all(struct fallthrough_cache *cache, uint64_t key_seed, size_t cnt) {
+    printf("Dropping %zu pages\n", cnt);
     size_t hits = 0;
     for (size_t i = 0; i < cnt; ++i) {
         uint64_t key = key_seed + i;
@@ -84,19 +85,20 @@ float drop_all(struct fallthrough_cache *cache, uint64_t key_seed, size_t size) 
 
 void run_check_twice_test(struct fallthrough_cache *cache, size_t size, float expected_hitrate) {
     uint64_t key_seed = random_next();
-    float hitrate1 = check_all(cache, key_seed, size/PAGE_SIZE);
+    uint64_t cnt = size/PAGE_SIZE;
+    float hitrate1 = check_all(cache, key_seed, cnt);
 
     printf("Hitrate 1: %.2f%%\n", hitrate1 * 100);
     printf("\n== Start second pass ==\n");
     
     // fallthrough_cache_debug(cache, true);
-    float hitrate2 = check_all(cache, key_seed, size/PAGE_SIZE);
+    float hitrate2 = check_all(cache, key_seed, cnt);
     printf("Hitrate 2: %.2f%%\n", hitrate2 * 100);
 
     assert(hitrate2 > hitrate1);
     assert(hitrate2 > expected_hitrate);
 
-    drop_all(cache, key_seed, size);
+    drop_all(cache, key_seed, cnt);
 }
 
 
@@ -140,8 +142,8 @@ int main(int argc, char **argv) {
         run_smoke_test(cache);
     } else if (strcmp(argv[3], "check_twice") == 0) {
         run_check_twice_test(cache, memory_size * G, 0.9);
-
-        run_check_twice_test(cache, memory_size * G, 0.4);
+        fallthrough_cache_debug(cache, false);
+        run_check_twice_test(cache, memory_size * G, 0.9);
     } else {
         printf("Unknown suite: %s\n", argv[3]);
         return 1;

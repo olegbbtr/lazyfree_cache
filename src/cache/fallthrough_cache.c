@@ -122,6 +122,7 @@ bool fallthrough_cache_drop(struct fallthrough_cache* cache,
     uint8_t *tail;
     bool found = cache->impl.read_try_lock(cache->cache, key / cache->entries_per_page, &head, &tail);
     if (found) {
+        // printf("FALLTHROUGH DROP OK: %zu %zu\n", key / cache->entries_per_page, key % cache->entries_per_page);
         cache->impl.unlock(cache->cache, true);
         return true;
     }
