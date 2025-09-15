@@ -1,28 +1,32 @@
-# LazyFree userspace cache
+# LazyFree cache
 
-This is an implementation of LazyFree cache in userspace.
-In this implementation, kernel can evict any page when there is memory pressure.
-It provides zero-copy API to allocate 4KB pages.
+LazyFree cache is an implementation of 4KB page cache on top of discardable memory.
 
-This is possible due to the `MADV_FREE` ([madvise(2)](https://man7.org/linux/man-pages/man2/madvise.2.html)) flag. 
+Discardable memory provides the Linux Kernel a way to reclaim some mmaped pages for other use in the system.
+This works similarly to file-backed memory, but it saves cold pages to `/dev/null`.
+
+Provides Zero-Copy APIs and minimizes hashtable lookups to the theoretical minimum.
+
+Implementation is based on `MADV_FREE` ([madvise(2)](https://man7.org/linux/man-pages/man2/madvise.2.html)) flag.
 It is avaliable since Linux 4.5.
+
 The semantics of the range under `MADV_FREE` is:
 
 - If the page was not evicted, all reads from the page return page data.
 - If the page was evicted, all reads from the page return zeros.
 
-This approach can be useful if running on a system with occasional unpredictable memory pressure, if the data stored in page is easily reconstructable
+This implementation can be useful if running on a system with occasional unpredictable memory pressure, and there is a way
+to reconstruct the page data from the ground truth.
 
 ## LazyFree API
 
 [lazyfree_cache.h](include/lazyfree_cache.h) provides default LazyFree API.
 
 ```c
+// == Core API ==
 
 // PAGE_SIZE must be equal to kernel page size.
 #define PAGE_SIZE 4096
-
-// == Core API ==
 
 typedef struct lazyfree_cache* lazyfree_cache_t;
 
@@ -108,7 +112,6 @@ void ft_cache_get(ft_cache_t *cache,
 bool ft_cache_drop(ft_cache_t *cache, lazyfree_key_t key);
 ```
 
-
 ### Other headers
 
 - `cache.h` - generic cache interface.
@@ -132,10 +135,12 @@ Fortunately, this happens at page granularity, and we can detect if page was res
 bit0 on every page is set to 1 and is used to detect page resets.
 That is why the first byte is provided separately.
 
-Also, the cache performes eviction if there are no free pages left. 
+Also, the cache performes eviction if there are no free pages left.
 If it happens to the key, the lock_check will return false as well.
 
 The locking mechanism is designed in such way to minimize hashmap lookups over the lifecycle of a key.
+
+Note that ABA is not possible, since locking the same page twice is not allowed.
 
 ## Benchmarks
 
