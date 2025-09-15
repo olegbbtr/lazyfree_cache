@@ -17,8 +17,7 @@
 #include "random.h"
 
 
-#define DEBUG_KEY 0ul
-// #define DEBUG_KEY -1ul
+#define DEBUG_KEY -1ul
 
 #define NUMBER_OF_CHUNKS 16
 static_assert(NUMBER_OF_CHUNKS < (1 << 7), "Too many chunks");
@@ -500,6 +499,7 @@ struct lazyfree_stats lazyfree_fetch_stats(lazyfree_cache_t cache, bool verbose)
     stats.total_pages = lazyfree_cache->cache_capacity / PAGE_SIZE;
     stats.free_pages = lazyfree_cache->total_free_pages;
     print_stats(cache);
+    lazyfree_cache->verbose = verbose;
     return stats;
 }
 

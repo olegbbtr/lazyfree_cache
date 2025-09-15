@@ -22,7 +22,7 @@ static uint64_t random_next(void) {
     return __global_seed ^ 0xdeadbeef; // So that we don't follow the same path every time
 }
 
-static void random_rotate() {
+inline static void random_rotate() {
     __global_seed = time(NULL);
     random_next();
 }

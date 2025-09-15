@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <assert.h>
 
 // PAGE_SIZE should be equal to kernel page size.
 #define PAGE_SIZE 4096
@@ -27,12 +28,12 @@ typedef struct {
     bool active;
     // Internal use
     uint8_t _chunk;
+    uint8_t _padding;
     // Data is two parts
     uint8_t head;
     uint8_t* tail;
 } lazyfree_rlock_t;  
-
-// static_assert(sizeof(lazyfree_rlock_t) == 16, "");
+static_assert(sizeof(lazyfree_rlock_t) == 24, "");
 
 struct lazyfree_impl {
     lazyfree_cache_t (*new)(size_t cache_size, lazyfree_mmap_impl_t mmap_impl, lazyfree_madv_impl_t madv_impl);

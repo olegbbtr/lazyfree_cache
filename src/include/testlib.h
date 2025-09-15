@@ -75,15 +75,6 @@ static float testlib_get_all(ft_cache_t *cache,
     return hitrate;
 }
 
-static uint64_t testlib_get_all_latency(ft_cache_t *cache, 
-                                        struct testlib_keyset *keyset) {
-    struct timespec start, end;
-    clock_gettime(CLOCK_MONOTONIC, &start);
-    testlib_get_all(cache, keyset);
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    return (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1e6;
-}
-
 // Returns hitrate
 static float testlib_drop_all(ft_cache_t *cache,
                               struct testlib_keyset *keyset) {
