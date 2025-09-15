@@ -1,13 +1,13 @@
-#include "fallthrough_cache.h"
-#include "testlib.h"
-
-#include "lazyfree_cache.h"
-#include "cache.h"
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
 
+#include "cache.h"
+#include "ft_cache.h"
+#include "lazyfree_cache.h"
+
+#include "testlib.h"
 
 
 int main(int argc, char** argv) {
@@ -44,13 +44,13 @@ int main(int argc, char** argv) {
     random_rotate();
 
     printf("\n== Benchmark: %s, cache_size=%zu GB ==\n", argv[1], cache_size/G);
-    struct fallthrough_cache* cache = fallthrough_cache_new(impl,
-                                            cache_size,
-                                            sizeof(uint64_t),
-                                            1,
-                                            refill_cb);
+    
+    ft_cache_t cache;
+    ft_cache_init(&cache, impl,
+        cache_size/PAGE_SIZE, sizeof(uint64_t),
+        refill_cb, NULL);
     // run_full_set(cache, cache_size);
-    struct hot_cold_report report = run_hot_cold(cache, set_size, cache_size);
+    struct hot_cold_report report = run_hot_cold(&cache, set_size, cache_size);
     printf("\n== Report ==\n");
     printf("impl=%s\n", argv[1]);
     printf("cache_size_gb=%zu\n", cache_size/G);
@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
     testlib_print_report(report.hot_after_reclaim, "hot_after_reclaim");
     testlib_print_report(report.cold_after_reclaim, "cold_after_reclaim");
     
-    fallthrough_cache_free(cache);
+    ft_cache_destroy(&cache);
 }
 
 

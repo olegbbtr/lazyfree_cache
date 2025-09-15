@@ -9,18 +9,13 @@
 #include <assert.h>
 #include <stdlib.h>
 
-
-
-#include "fallthrough_cache.h"
+#include "ft_cache.h"
 #include "lazyfree_cache.h"
 #include "random_cache.h"
-// #include "disk_cache.h"
-
 
 #include "random.h"
 #include "refill.h"
 #include "testlib.h"
-
 
 
 #define SMOKE_TEST_CNT 10
@@ -31,7 +26,7 @@ void run_smoke_test(struct fallthrough_cache *cache) {
     for (size_t i = 0; i < SMOKE_TEST_CNT; ++i) {
         keys[i] = random_next() + i;
         uint64_t value;
-        fallthrough_cache_get(cache, keys[i], (uint8_t*) &value);
+        ft_cache_get(cache, keys[i], (uint8_t*) &value);
 
         // Refills one more time
         assert(refill_ctx.count == i + 1);
@@ -39,7 +34,7 @@ void run_smoke_test(struct fallthrough_cache *cache) {
 
     uint64_t values[SMOKE_TEST_CNT];
     for (size_t i = 0; i < SMOKE_TEST_CNT; ++i) {
-        fallthrough_cache_get(cache, keys[i], (uint8_t*) &values[i]);
+        ft_cache_get(cache, keys[i], (uint8_t*) &values[i]);
         if (values[i] != refill_expected(keys[i])) {
             printf("Value %zu: %lu != expected %lu\n", i, values[i], refill_expected(keys[i]));
             exit(1);
@@ -49,7 +44,7 @@ void run_smoke_test(struct fallthrough_cache *cache) {
     }
 
     for (size_t i = 0; i < SMOKE_TEST_CNT; ++i) {
-        bool ok = fallthrough_cache_drop(cache, keys[i]);
+        bool ok = ft_cache_drop(cache, keys[i]);
         assert(ok);
     }
 
@@ -75,7 +70,7 @@ float check_hitrate(struct fallthrough_cache *cache, size_t size) {
         exit(1);
     }
     
-    testlib_drop_all(cache, keyset);
+    testlib_drop_all(cache, &keyset);
     return hitrate2;
 }
 
@@ -118,12 +113,17 @@ void suite_lazyfree(size_t memory_size, bool full) {
     impl.mmap_impl = mmap_normal;
     impl.madv_impl = madv_lazyfree;
 
-    size_t set_size = memory_size - 128*PAGE_SIZE;
-    struct fallthrough_cache* cache = fallthrough_cache_new(impl, memory_size, sizeof(uint64_t), 1, refill_cb);
+    size_t num_entries = memory_size/PAGE_SIZE;
+    size_t set_size = num_entries - 128;
+
+    ft_cache_t cache;
+    ft_cache_init(&cache, impl, 
+        num_entries, sizeof(uint64_t), 
+        refill_cb, NULL);
 
 
-    run_smoke_test(cache);
-    // fallthrough_cache_debug(cache, false);
+    run_smoke_test(&cache);
+    // fallthrough_cache_debug(&cache, false);
 
     // sleep(100);
 
@@ -132,15 +132,15 @@ void suite_lazyfree(size_t memory_size, bool full) {
         return;
     }
     
-    // fallthrough_cache_debug(cache, true);
-    float hitrate = check_hitrate(cache, set_size);
+    // fallthrough_cache_debug(&cache, true);
+    float hitrate = check_hitrate(&cache, set_size);
     if (hitrate < 0.7) {
         printf("set_size=%zuMb hitrate=%.2f, expect >= 0.8\n", set_size/M, hitrate);
         exit(1);
     }
 
     // Hitrate should be >15%
-    hitrate = check_hitrate(cache, 2*set_size);
+    hitrate = check_hitrate(&cache, 2*set_size);
     if (hitrate < 0.15) {
         printf("set_size=%zuMb hitrate=%.2f, expect >= 0.15\n", set_size/M, hitrate);
         exit(1);
@@ -152,16 +152,14 @@ void suite_normal(size_t memory_size) {
     impl.mmap_impl = mmap_normal;
     impl.madv_impl = madv_noop;
     
-    size_t set_size = memory_size - 128*PAGE_SIZE;
-    struct fallthrough_cache* cache = fallthrough_cache_new(impl, 
-        memory_size, 
-        sizeof(uint64_t), 
-        1,
-        refill_cb);
+    size_t set_size = memory_size/PAGE_SIZE - 128;
+    ft_cache_t cache;
+    ft_cache_init(&cache, impl, 
+        set_size, sizeof(uint64_t), 
+        refill_cb, NULL);
+    run_smoke_test(&cache);    
 
-    run_smoke_test(cache);    
-
-    float hitrate = check_hitrate(cache, set_size);
+    float hitrate = check_hitrate(&cache, set_size);
     if (hitrate < 1) {
         printf("set_size=%zuMb hitrate=%.2f, expect >= 1\n", set_size/M, hitrate);
         exit(1);
@@ -173,16 +171,15 @@ void suite_disk(size_t memory_size) {
     impl.mmap_impl = mmap_file;
     impl.madv_impl = madv_noop;
 
-    size_t set_size = memory_size - 128*PAGE_SIZE;
-    struct fallthrough_cache* cache = fallthrough_cache_new(impl, 
-        memory_size, 
-        sizeof(uint64_t), 
-        1,
-        refill_cb);
+    size_t set_size = memory_size/PAGE_SIZE - 128;
+    ft_cache_t cache;
+    ft_cache_init(&cache, impl, 
+        set_size, sizeof(uint64_t), 
+        refill_cb, NULL);
 
-    run_smoke_test(cache);
+    run_smoke_test(&cache);
 
-    float hitrate = check_hitrate(cache, set_size);
+    float hitrate = check_hitrate(&cache, set_size);
     assert(hitrate == 1);
 }
 

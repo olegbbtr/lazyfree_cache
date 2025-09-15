@@ -265,14 +265,14 @@ static void cache_read_unlock(struct lazyfree_cache* cache, bool drop) {
 
 // == Write lock implementation ==
 
-static void drop_random_chunk(struct lazyfree_cache* cache) {
-    cache->current_chunk_idx = random_next() % NUMBER_OF_CHUNKS;
+static void drop_next_chunk(struct lazyfree_cache* cache) {
+    cache->current_chunk_idx++;
     struct chunk* chunk = &cache->chunks[cache->current_chunk_idx];
-    printf("DEBUG: Dropping chunk %zu\n", cache->current_chunk_idx);
         
-    // if (cache->verbose) {
+    if (cache->verbose) {
+        printf("DEBUG: Dropping chunk %zu\n", cache->current_chunk_idx);
         lazyfree_cache_debug(cache, false);
-    // }
+    }
     for (size_t i = 0; i < chunk->len; ++i) {
         hmap_remove(cache, chunk->keys[i]);
     }
@@ -364,9 +364,9 @@ static bool cache_write_lock(struct lazyfree_cache* cache,
     
     if (cache->total_free_pages < MIN_FREE_TOTAL_PAGES) {
         if (cache->verbose || key == DEBUG_KEY) {
-            printf("No free pages, freeing up random chunk\n");
+            printf("No free pages, freeing up next chunk\n");
         }
-        drop_random_chunk(cache);
+        drop_next_chunk(cache);
     }
 
     if (cache->verbose || key == DEBUG_KEY) {

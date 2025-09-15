@@ -9,7 +9,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "fallthrough_cache.h"
+#include "ft_cache.h"
 #include "refill.h"
 
 
@@ -55,13 +55,13 @@ void testlib_free_keyset(struct testlib_keyset *keyset) {
 static bool testlib_verbose = false;
 
 // Returns hitrate
-static float testlib_get_all(struct fallthrough_cache *cache, 
+static float testlib_get_all(ft_cache_t *cache, 
                                struct testlib_keyset *keyset) {
     refill_ctx.count = 0;
     for (size_t i = 0; i < keyset->cnt; ++i) {
         uint64_t key = keyset->seed + keyset->permutation[i];
         uint64_t value;
-        fallthrough_cache_get(cache, key, (uint8_t*) &value);
+        ft_cache_get(cache, key, (uint8_t*) &value);
 
         if (value != refill_expected(key)) {
             printf("Key %lu: Value %lu != expected %lu\n", key, value, refill_expected(key));
@@ -75,7 +75,7 @@ static float testlib_get_all(struct fallthrough_cache *cache,
     return hitrate;
 }
 
-static uint64_t testlib_get_all_latency(struct fallthrough_cache *cache, 
+static uint64_t testlib_get_all_latency(ft_cache_t *cache, 
                                         struct testlib_keyset *keyset) {
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
@@ -85,20 +85,20 @@ static uint64_t testlib_get_all_latency(struct fallthrough_cache *cache,
 }
 
 // Returns hitrate
-static float testlib_drop_all(struct fallthrough_cache *cache,
-                             struct testlib_keyset keyset) {
+static float testlib_drop_all(ft_cache_t *cache,
+                              struct testlib_keyset *keyset) {
     
     // fallthrough_cache_debug(cache, false);
 
     size_t hits = 0;
-    for (size_t i = 0; i < keyset.cnt; ++i) {
-        uint64_t key = keyset.seed + i;
-        hits += fallthrough_cache_drop(cache, key);
+    for (size_t i = 0; i < keyset->cnt; ++i) {
+        uint64_t key = keyset->seed + i;
+        hits += ft_cache_drop(cache, key);
     }
 
     // fallthrough_cache_debug(cache, false);
-    float hitrate = ((float) hits) / (float) keyset.cnt;
-    // printf("dropped %zu hitrate=%.2f%%\n", keyset.cnt, hitrate * 100);
+    float hitrate = ((float) hits) / (float) keyset->cnt;
+    // printf("dropped %zu hitrate=%.2f%%\n", keyset->cnt, hitrate * 100);
     return hitrate;
 }
 
@@ -219,8 +219,8 @@ struct hot_cold_report run_hot_cold(struct fallthrough_cache* cache, size_t set_
     // }
 
 
-    testlib_drop_all(cache, hot_set);
-    testlib_drop_all(cache, cold_set);
+    testlib_drop_all(cache, &hot_set);
+    testlib_drop_all(cache, &cold_set);
 
     return report;
 }
