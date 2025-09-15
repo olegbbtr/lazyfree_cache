@@ -70,8 +70,10 @@ struct lazyfree_cache {
     bool verbose;
 };
 
-static int exact_key_comparer(const void *a, hashmap_uint32_t /*a_len*/,
-                              const void *b, hashmap_uint32_t /*b_len*/) {
+static int exact_key_comparer(const void *a, hashmap_uint32_t a_len,
+                              const void *b, hashmap_uint32_t b_len) {
+    UNUSED(a_len);
+    UNUSED(b_len);
     return a == b;
 }
 
@@ -86,7 +88,8 @@ static uint32_t hash_u64_to_u32(uint64_t key) {
 
 static hashmap_uint32_t exact_key_hasher(hashmap_uint32_t seed,
                                          const void *key,
-                                         hashmap_uint32_t /*key_len*/) {
+                                         hashmap_uint32_t key_len) {
+    UNUSED(key_len);
     return seed + hash_u64_to_u32((uint64_t) key) + 1;
 }
 

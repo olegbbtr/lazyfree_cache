@@ -1,5 +1,5 @@
 CC = clang
-CFLAGS = -g -Wall -Wextra -fno-omit-frame-pointer -O0 -march=native -std=gnu23 -Iinclude -Isrc/include
+CFLAGS = -g -Wall -Wextra -fno-omit-frame-pointer -O0 -march=native -std=gnu18 -Iinclude -Isrc/include
 DEV_FLAGS = -fsanitize=address,undefined \
 			-fsanitize-address-use-after-scope
 # CFLAGS += $(DEV_FLAGS)

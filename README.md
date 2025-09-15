@@ -158,10 +158,10 @@ The following on top of `ft_cache_t` is performed (see [./run_benchmark.sh](run_
 
  Implementation | Memory usage | Disk usage | Hot/Cold hitrate | Hot latency | Cold latency |
 ----------------|--------------|------------|------------------|-------------|--------------|
-`LazyFree`      |     4Gb      |      0     |    45% / 23%     |    72ms     |      2.0s    |
-`Disk`          |     4Gb      |     4Gb    |   100% / 100%    |   428ms     |      4.7s    |
-`Anon` Full     |     4Gb      |      0     |      OOM         |     OOM     |       OOM    |
-`Anon` Small    |     1Gb      |      0     |   100% / 100%    |   125ms     |      1.8s    |
+`LazyFree`      |     4Gb      |      0     |    45% / 23%     |    72ms     |     2.0s     |
+`Disk`          |     4Gb      |     4Gb    |   100% / 100%    |   428ms     |     4.7s     |
+`Anon` Full     |     4Gb      |      0     |      OOM         |     OOM     |     OOM      |
+`Anon` Small    |     1Gb      |      0     |   0% / 8%        |   125ms     |     1.8s     |
 `Stub`          |      0       |      0     |    0% / 0%       |     1ms     |      0%      |
 ----------------|--------------|------------|------------------|-------------|--------------|
 Best option     | Not `Stub`!| Not `Disk` | Depends on refill vs disk costs | `LazyFree` | `LazyFree` or resizable `Anon` |
