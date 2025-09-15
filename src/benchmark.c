@@ -51,10 +51,7 @@ int main(int argc, char** argv) {
         refill_cb, NULL);
     // run_full_set(cache, cache_size);
     struct hot_cold_report report = run_hot_cold(&cache, set_size, set_size*0.75);
-    printf("\n== Report ==\n");
-    printf("impl=%s\n", argv[1]);
-    printf("cache_size_gb=%zu\n", cache_size/G);
-    printf("set_size_gb=%zu\n", set_size/G);
+    printf("\n== Report %s, cache_size=%zuGb, set_size=%zuGb ==\n", argv[1], cache_size/G, set_size/G);
     
     testlib_print_report(report.hot_before_reclaim, "hot_before_reclaim");
     testlib_print_report(report.cold_before_reclaim, "cold_before_reclaim");

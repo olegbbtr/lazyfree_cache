@@ -1,160 +1,232 @@
 # LazyFree userspace cache
 
 This is an implementation of LazyFree cache in userspace.
+It provides zero-copy API to allocate pages.
 In this implementation, kernel can evict any page when there is memory pressure.
-It is based on `MADV_FREE` ([madvise(2)](https://man7.org/linux/man-pages/man2/madvise.2.html)) parameter. (TODO version linux kernel)
+
+This is possible due to the `MADV_FREE` ([madvise(2)](https://man7.org/linux/man-pages/man2/madvise.2.html)) flag. It is avaliable since Linux 4.5.
 
 This implementation can be useful if running on a system with occasional unpredictable memory pressure, such
 that all the data is reconstructable from other sources.
 
-## API
+## LazyFree API
+
+[lazyfree_cache.h](include/lazyfree_cache.h) provides default LazyFree API.
 
 ```c
-// Must be equal to kernel PAGE_SIZE
-#define PAGE_SIZE 4096
+// == Core API ==
+typedef struct lazyfree_cache* lazyfree_cache_t;
+lazyfree_cache_t lazyfree_cache_new(size_t cache_capacity);
+void lazyfree_cache_free(lazyfree_cache_t cache);
 
-// Cache capacity is in bytes. 
-// If the cache is full, it will start evicting random chunks.
-lfcache_t lazyfree_cache_new(size_t cache_capacity);
+typedef uint64_t lazyfree_key_t;
 
-void lazyfree_cache_free(lfcache_t cache);
 
-// == Low-level API ==
-// This might look complex, but it is required to support zero-copy.
+// == Optimistic Read Lock API ==
+// This might look complicated, but it is necessary to support
+// zero-copy reads.
 
-// Lock the cache to write to the key.
-//  - Sets 'value' to point at the page inside the cache.
-//  - Next call must be lazyfree_cache_unlock.
-//    Pointer is valid until then.
-//  - Returns true if the key has existing data.
-//    Returns false if the key was just allocated and is empty.
-bool lazyfree_cache_write_lock(lfcache_t cache, 
-                               cache_key_t key,
-                               uint8_t **value);
-                           
-//  Try to take optmistic read lock.
-//  If fails, returns false and leaves the cache unlocked.
-//  Otherwise:
-//  - Sets 'head' to the first byte of the page.
-//  - Sets 'tail' to point at the [1:PAGE_SIZE] of the page.
-//  - After reading from 'tail', must call lazyfree_cache_read_lock_check 
-//    to see if the lock is still valid.
-//  - 'tail' is valid until lazyfree_cache_unlock.
-bool lazyfree_cache_read_try_lock(lfcache_t cache, 
-                                  cache_key_t key,
-                                  uint8_t *head,
-                                  uint8_t **tail);
+typedef struct {
+    /* ... */
+    uint8_t head;       // First byte of the page
+    uint8_t* tail;      // [1:PAGE_SIZE]
+} lazyfree_rlock_t;  
 
-// Check if the read lock is still valid.
-bool lazyfree_cache_read_lock_check(lfcache_t cache);
+// Take an optimistic read lock.
+// Returns the handle with two fields:
+//    head - page[0]
+//    tail - ptr to page[1:PAGE_SIZE] if found, NULL otherwise
+// The lock can be upgraded to a write lock.
+lazyfree_rlock_t lazyfree_read_lock(lazyfree_cache_t cache, lazyfree_key_t key);
 
-// Unlock the cache.
-// If 'drop' is true, the key is dropped from the cache.
-void lazyfree_cache_unlock(lfcache_t cache, bool drop);
+// Check the lock is still valid.
+// Needs to be used after every read from tail, to verify the page has not been dropped.
+bool lazyfree_read_lock_check(lazyfree_cache_t cache, lazyfree_rlock_t lock);
+
+// Unlock the read lock.
+// If drop is true, drops the page.
+void lazyfree_read_unlock(lazyfree_cache_t cache, lazyfree_rlock_t lock, bool drop);
+
+
+// == Write Lock API ==
+// Only one page can be locked for write at the time.
+// There are two ways to get a write lock:
+
+// Allocates a new page in the cache.
+// Must not be called for existing keys, instead use upgrade.
+// Returns ptr to page[0:PAGE_SIZE]
+void* lazyfree_write_alloc(lazyfree_cache_t cache, lazyfree_key_t key);
+
+// Upgrade the read lock into write lock.
+// Returns ptr to page[0:PAGE_SIZE]
+void* lazyfree_write_upgrade(lazyfree_cache_t cache, lazyfree_rlock_t* lock);
+
+// Unlocks the write lock.
+// If drop is true, drops the page.
+void lazyfree_write_unlock(lazyfree_cache_t cache, bool drop);
 ```
+
+### Fallthrough API
+
+[fallthrough_cache.h](include/fallthrough_cache.h) provides higher-level API on top of generic implemmentation.
+On miss, this cache will refill entry from ground truth.
+
+```c
+// Init Fallthrough Cache
+// Takes generic lazyfree_impl and refill callback.
+void ft_cache_init(ft_cache_t *cache, struct lazyfree_impl impl, 
+                   size_t capacity, size_t entry_size,
+                   ft_refill_t refill_cb, void *refill_opaque);
+
+// Destroy Fallthrough Cache
+void ft_cache_destroy(ft_cache_t *cache);
+
+// Get value from cache, or repopulate
+void ft_cache_get(ft_cache_t *cache, 
+                  lazyfree_key_t key, 
+                  uint8_t *value);
+
+// Returns true if found, false if not found.
+bool ft_cache_drop(ft_cache_t *cache, lazyfree_key_t key);
+```
+
+
+### Other headers
+
+- `cache.h` - generic cache interface.
+- `stub_cache.h` - stub cache implementation.
+  - It never stores any pages, and claims all read lock attempts are unsuccessful.
+- `hashmap.h` - taken from [hashmap.h](https://github.com/sheredom/hashmap.h).
+  - Previously had [stb_ds.h](https://nothings.org/stb_ds/), but it had some issues with deletion.
+  - No other public domain hashmaps could be found :(
+  - Open Addressing Hashmap can probably be implemented inside the cache, for even better performance.
+- `testlib.h` - includes tools to build cache tests and benchmarks.
 
 ## Implementation details
 
 The cache consists of a fixed number of chunks (e.g. 32).
-Chunks are arranged in a circular buffer.
+There is one persistent annonymous allocation per chunk.
+Chunks are arranged in a circular order.
+New page allocations happen only to the current chunk.
+After the current chunk has no more free pages,  `madvise(..., MADV_FREE);` is called.
+That memory can now be reclaimed by kernel at any moment.
 
-New entries are stored in the current chunk.
-When the current chunk is full, that memory gets `madvise(..., MADV_FREE);`.
-From that point, kernel can selectively reclaim any pages from that memory, but until that, entries are available to read.
-`madv_cache_get` is able to detect when page gets cleared, and gracefully handle that case.
+Fortunately, this happens at page granularity, and we can detect if page was reset.
+bit0 on every page is set to 1 and is used to detect page resets.
+That is why the first byte is provided separately.
 
-Simultaneously with writing to the current chunk, during `madv_cache_put()` amortized compaction is performed on the next chunk.
-Compaction brings all non-reclaimed entries to the front of the chunk.
-When this next chunk becomes current chunk, new entries can be written to the cleared right part of the chunk.
+The locking mechanism is designed in a way to minimize hashmap lookups over the lifecycle of a key.
 
-## Extra implementations
+## Benchmarks
 
-This repository also includes:
+The aim of the benchmark is to simulate a system with unpredictable memory pressure.
 
-1. Fallthrough cache - wraps around LazyFree cache and provides simpler API:
+The following on top of `ft_cache_t` is performed (see [./run_benchmark.sh](run_benchmark.sh)):
 
-```c
-ft_cache_t fallthrough_cache_new(struct lfcache_impl impl, 
-                                  size_t cache_size,
-                                  size_t entry_size,
-                                  refill_cb_t refill_cb, 
-                                  void *refill_opaque);
+1. Docker container is setup with soft memory limit of `4Gb`, hard limit of `4.5Gb`
+2. Two separate sets of keys are defined defined: `hot_size = 256MB`, `cold_size = 3.5Gb`
+3. Hot keys are accessed through the cache `8` times, cold keys are accessed `2` times.
+4. Hitrate and latency for both sets are measured on a random permutation of keys.
+5. Reclaim simulation happens: benchmarks performs several allocations in total equal to `3Gb`.
+   In theory this means only `1.5Gb` of memory is left for the cache.
+6. Hitrate and latency are measured once again.
 
-void fallthrough_cache_free(ft_cache_t cache);
+ Implementation | Memory usage | Disk usage | Cold latency | Cold hitrate | Reclaim latency |
+----------------|--------------|------------|--------------|--------------|-----------------|
+`LazyFree`      |     4Gb      |      0     |     2.9s     |     23%      |      2.3s       |
+`Disk`          |     4Gb      |     4Gb    |     5.2s     |      0       |      2.2s       |
+`Anon` Full     |     4Gb      |      0     |      OOM     |     OOM      |       OOM       |
+`Anon` Small    |     1Gb      |      0     |     2.8s     |      6%      |      1.5s       |
+`Stub`          |      0       |      0     |     0.11s    |      0%      |      1.2s       |
+================|==============|============|==============|==============|=================|
+What is best    | `Stub`    | Any `Anon` |`LazyFree`|Depends on reconstruction cost|Depends on disk|
 
-void fallthrough_cache_get(ft_cache_t cache, 
-                           cache_key_t key, 
-                           uint8_t *value);
+Theoretical max hitrate:
+`(4Gb quota - 3Gb reclaim)/(3.5G cold set size) = 28%`
 
-void fallthrough_cache_drop(ft_cache_t cache, cache_key_t key);
-```
+Overall, `LazyFree` is quite close to the theoretical limit. This all also heavily depends on exact benchmark implementation.
 
-
-2. Disk cache - Same implementation as LazyFree, but stores data on disk instead of LazyFree memory.
-
-```c
-lfcache_t disk_cache_new(size_t capacity, char *path);
-
-// Use all other functions from LazyFree cache.
-```
-
-
-## Benchmark results
+<details>
+<summary>Raw data</summary>
 
 ```text
-impl=lazyfree
-cache_size_gb=4
-before_full_hitrate=1.00
-before_full_latency_ms=373
-before_core_hitrate=1.00
-before_core_latency_ms=9
-reclaim_latency=1620.75 ms       <--
-after_full_hitrate=0.56          <--
-after_full_latency_ms=13419      <--
-after_core_hitrate=1.00
-after_core_latency_ms=13
+~> ./run_benchmark.sh
 
+== Report lazyfree, cache_size=4Gb, set_size=4Gb ==
+hot_before_reclaim_hitrate=1.00
+hot_before_reclaim_latency=62ms
+cold_before_reclaim_hitrate=1.00
+cold_before_reclaim_latency=918ms   
+reclaim_latency=2309.12ms           
+hot_after_reclaim_hitrate=0.00
+hot_after_reclaim_latency=285ms
+cold_after_reclaim_hitrate=0.23     <---- or   
+cold_after_reclaim_latency=2981ms   <----
 
-impl=disk
-cache_size_gb=4
-before_full_hitrate=1.00
-before_full_latency_ms=420
-before_core_hitrate=1.00
-before_core_latency_ms=9
-reclaim_latency=2028.91 ms       <--
-after_full_hitrate=1.00          <--
-after_full_latency_ms=13349      <--
-after_core_hitrate=1.00
-after_core_latency_ms=11
+== Report disk, cache_size=4Gb, set_size=4Gb ==
+hot_before_reclaim_hitrate=1.00
+hot_before_reclaim_latency=43ms
+cold_before_reclaim_hitrate=1.00
+cold_before_reclaim_latency=665ms
+reclaim_latency=2266.80ms           <--- need slower disk!
+hot_after_reclaim_hitrate=1.00
+hot_after_reclaim_latency=415ms     
+cold_after_reclaim_hitrate=1.00     <--- 
+cold_after_reclaim_latency=5281ms   <--- Paging in more expensive than reconstrictuion
 
+== Report anon, cache_size=1Gb, set_size=4Gb == 
+hot_before_reclaim_hitrate=0.00
+hot_before_reclaim_latency=209ms
+cold_before_reclaim_hitrate=0.06    <--- Cache has to be very small
+cold_before_reclaim_latency=2804ms
+reclaim_latency=1512.10ms
+hot_after_reclaim_hitrate=0.00
+hot_after_reclaim_latency=221ms
+cold_after_reclaim_hitrate=0.06
+cold_after_reclaim_latency=2836ms
 
-impl=normal
-cache_size_gb=4
-before_full_hitrate=0.24
-before_full_latency_ms=1875
-before_core_hitrate=0.37
-before_core_latency_ms=63
-reclaim_latency=1271.18 ms       <--
-after_full_hitrate=0.23          <--
-after_full_latency_ms=1564       <--
-after_core_hitrate=0.37
-after_core_latency_ms=32
+== Report stub, cache_size=4Gb, set_size=4Gb ==
+hot_before_reclaim_hitrate=0.00
+hot_before_reclaim_latency=5ms
+cold_before_reclaim_hitrate=0.00
+cold_before_reclaim_latency=85ms
+reclaim_latency=1204.77ms       <--- Represents the testing overhead
+hot_after_reclaim_hitrate=0.00
+hot_after_reclaim_latency=7ms
+cold_after_reclaim_hitrate=0.00
+cold_after_reclaim_latency=114ms
 ```
 
+</details>
 
+There are also regression tests via `./run_tests.sh`.
 
+## Similar technologies
+
+- Would be achivable with inside kernel with it's memory primitives. Having it in userspace is more convienient.
+- Chromium has [discardable memory](https://chromium.googlesource.com/chromium/src/%2B/main/docs/memory-infra/probe-cc.md?utm_source=chatgpt.com#Discardable-Category).
+- [Purgable](https://github.com/skeeto/purgeable) does mmap on every allocation - too slow.
+
+## Possible application
+
+Suppose there is a [disaggregated storage](https://en.wikipedia.org/wiki/Disaggregated_storage) system.
+The "compute" part of it operates on a relatively tight working set.
+That working set can be stored in the cache.
+On cache miss, it can easily be repopulated from the storage over the low-latency network.
+
+Using LazyCache might be preferable in order to:
+
+- Avoid the need for node to have persistent storage.
+- Don't spend latency on disk IO when cheaper reconstruction is avaliable.
 
 ## Futher improvements
 
-Can be made multithread safe with RWLock semantics, if our hashmap would support it. Can even have multiple writers, if we have multiple open chunks.
-
-
-Fallthrough cache should be able to pack multiple entries into a single page.
-
-
-TODO:
- - support reading from writing lock
- - support try read
- - support LRU on chunks
-
-upgrade_lock
+1. Right now, the eviction policy is very simple: it evicts random chunk.
+   - Perhaps, LFU on chunks is easy enough to implement.
+   - It is also possible to have large overcommitment on memory, such that kernel actively pages it out.
+   - If the two above are combined, and the eviction policy is similar to kernel's,
+     it might be possible to ever reuse only evicted memory.
+     Thus, all evictions would be guided by memory pressure.
+2. Already has RWLock semantics, can have multiple writers if writing to different chunks.
+3. Fallthrough cache should be able to pack multiple entries into a single page. They would be evicted together.
+4. Should have mesurements with different reclaim sizes.

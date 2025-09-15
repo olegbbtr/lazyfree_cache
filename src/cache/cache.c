@@ -5,7 +5,7 @@
 
 inline struct lazyfree_impl lazyfree_impl() {
     struct lazyfree_impl impl = {
-        .new = lazyfree_cache_new,
+        .new = lazyfree_cache_new_ex,
         .free = lazyfree_cache_free,
 
         .read_lock = lazyfree_read_lock,

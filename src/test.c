@@ -190,7 +190,7 @@ void suite_disk(size_t memory_size) {
 
 int main(int argc, char **argv) {
     testlib_verbose = true;
-    lazyfree_tests();
+    lazyfree_cache_tests();
 
 
     if (argc < 3) {

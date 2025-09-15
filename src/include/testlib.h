@@ -158,7 +158,7 @@ struct hot_cold_report {
 
 struct hot_cold_report run_hot_cold(struct fallthrough_cache* cache, size_t set_size, size_t reclaim_size) {
     size_t hot_size = 256 * M;
-    size_t cold_size = (set_size - hot_size) - 1*M;
+    size_t cold_size = (set_size - hot_size) - 256 * M;
     if (testlib_verbose) {
         printf("Hot size: %zuMb, cold size: %zuMb\n", hot_size/M, cold_size/M);
     }

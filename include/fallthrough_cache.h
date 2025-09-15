@@ -20,12 +20,16 @@ struct fallthrough_cache {
 
 typedef struct fallthrough_cache ft_cache_t; 
 
+// Init Fallthrough Cache
+// Takes generic lazyfree_impl and refill callback.
 void ft_cache_init(ft_cache_t *cache, struct lazyfree_impl impl, 
                    size_t capacity, size_t entry_size,
                    ft_refill_t refill_cb, void *refill_opaque);
 
+// Destroy Fallthrough Cache
 void ft_cache_destroy(ft_cache_t *cache);
 
+// Get value from cache, or repopulate
 void ft_cache_get(ft_cache_t *cache, 
                   lazyfree_key_t key, 
                   uint8_t *value);
@@ -33,6 +37,7 @@ void ft_cache_get(ft_cache_t *cache,
 // Returns true if found, false if not found.
 bool ft_cache_drop(ft_cache_t *cache, lazyfree_key_t key);
 
+// Print debug info and remember verbosity
 void ft_cache_debug(ft_cache_t *cache, bool verbose);
                 
 #endif

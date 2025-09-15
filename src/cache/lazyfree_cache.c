@@ -90,7 +90,9 @@ static hashmap_uint32_t exact_key_hasher(hashmap_uint32_t seed,
     return seed + hash_u64_to_u32((uint64_t) key) + 1;
 }
 
-static struct lazyfree_cache* cache_new(size_t cache_capacity, lazyfree_mmap_impl_t mmap_impl, lazyfree_madv_impl_t madv_impl) {
+lazyfree_cache_t lazyfree_cache_new_ex(size_t cache_capacity, 
+                                       lazyfree_mmap_impl_t mmap_impl, 
+                                       lazyfree_madv_impl_t madv_impl) {
     struct lazyfree_cache* cache = malloc(sizeof(struct lazyfree_cache));
     memset(cache, 0, sizeof(struct lazyfree_cache));
     cache->madv_impl = madv_impl;
@@ -225,9 +227,9 @@ bool rlock_check_head(struct lazyfree_cache* cache, lazyfree_rlock_t lock) {
 bool rlock_check_key(struct lazyfree_cache* cache, lazyfree_rlock_t lock) {
     struct chunk* chunk = &cache->chunks[lock._chunk];
     uint32_t index = rlock_to_index(chunk, lock);
-    if (chunk->keys[index] != lock.key) {
+    if (chunk->keys[index] != lock._key) {
         if (cache->verbose) {
-            printf("Key %lu was evicted by dropping the chunk\n", lock.key);
+            printf("Key %lu was evicted by dropping the chunk\n", lock._key);
         }
         return false;
     }
@@ -262,7 +264,7 @@ lazyfree_rlock_t lazyfree_read_lock(lazyfree_cache_t cache,
     assert(cache->wlock_chunk == EMPTY_DESC.chunk);
   
     lazyfree_rlock_t rlock = EMPTY_LOCK;
-    rlock.key = key;
+    rlock._key = key;
     if (desc.chunk == EMPTY_DESC.chunk) {
         if (cache->verbose) {
             printf("Key %lu not found\n", key);
@@ -460,19 +462,19 @@ void* lazyfree_write_alloc(lazyfree_cache_t cache, lazyfree_key_t key) {
 
 
 void* lazyfree_write_upgrade(lazyfree_cache_t cache, lazyfree_rlock_t* lock) {
-    if (cache->verbose || lock->key == DEBUG_KEY) {
-        printf("DEBUG: Upgrading lock for key %lu\n", lock->key);
+    if (cache->verbose || lock->_key == DEBUG_KEY) {
+        printf("DEBUG: Upgrading lock for key %lu\n", lock->_key);
     }
     assert(cache->wlock_chunk == EMPTY_DESC.chunk);
 
     if (lock->tail == NULL) {
         // This is an empty entry
-        return lazyfree_write_alloc(cache, lock->key);
+        return lazyfree_write_alloc(cache, lock->_key);
     }
 
     if (!rlock_check_key(cache, *lock)) {
         // This is now some other key
-        return lazyfree_write_alloc(cache, lock->key);
+        return lazyfree_write_alloc(cache, lock->_key);
     }
 
     // Use second byte to lock the page
@@ -481,14 +483,14 @@ void* lazyfree_write_upgrade(lazyfree_cache_t cache, lazyfree_rlock_t* lock) {
     if (!rlock_check_head(cache, *lock)) {
         lock->tail[0] = 0;
         printf("DEBUG: Page updated during upgrade\n");
-        return lazyfree_write_alloc(cache, lock->key);
+        return lazyfree_write_alloc(cache, lock->_key);
     }
     lock->tail[0] = byte1;
     
     // Set wlock
     cache->wlock_chunk = lock->_chunk;
     cache->wlock_index = lock->_index;
-    cache->wlock_key = lock->key;
+    cache->wlock_key = lock->_key;
     // Already in hashmap and keys
     
     struct chunk* chunk = &cache->chunks[lock->_chunk];
@@ -529,8 +531,8 @@ void lazyfree_write_unlock(lazyfree_cache_t cache, bool drop) {
 
 // == Public functions ==
 
-lazyfree_cache_t lazyfree_cache_new(size_t cache_capacity, lazyfree_mmap_impl_t mmap_impl, lazyfree_madv_impl_t madv_impl) {
-    return cache_new(cache_capacity, mmap_impl, madv_impl);
+lazyfree_cache_t lazyfree_cache_new(size_t cache_capacity) {
+    return lazyfree_cache_new_ex(cache_capacity, lazyfree_mmap_anon, lazyfree_madv_free);
 }
 
 struct lazyfree_stats lazyfree_fetch_stats(lazyfree_cache_t cache, bool verbose) {
@@ -608,10 +610,10 @@ void *lazyfree_mmap_file(size_t size) {
 
 // == Tests
 
-void lazyfree_tests() {
+void lazyfree_cache_tests() {
     uint64_t value = random_next();
     
-    lazyfree_cache_t cache = lazyfree_cache_new(32*NUMBER_OF_CHUNKS*PAGE_SIZE, lazyfree_mmap_anon, lazyfree_madv_cold);
+    lazyfree_cache_t cache = lazyfree_cache_new(32*NUMBER_OF_CHUNKS*PAGE_SIZE);
     
     
     uint64_t* ptr = lazyfree_write_alloc(cache, 1);

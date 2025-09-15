@@ -24,12 +24,14 @@ struct lazyfree_stats {
 };
 
 typedef struct {
-    uint16_t _index;    // Internal use
-    int8_t _chunk;      // Internal use
+    // == INTERNAL USE ==
+    lazyfree_key_t _key; 
+    uint16_t _index;    
+    int8_t _chunk;      
+    // == END INTERNAL USE ==
 
     uint8_t head;       // First byte of the page
     uint8_t* tail;      // [1:PAGE_SIZE]
-    lazyfree_key_t key; // key
 } lazyfree_rlock_t;  
 static_assert(sizeof(lazyfree_rlock_t) == 24, "");
 
