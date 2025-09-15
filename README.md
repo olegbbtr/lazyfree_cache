@@ -151,15 +151,15 @@ The following on top of `ft_cache_t` is performed (see [./run_benchmark.sh](run_
    In theory this means only `1.5Gb` of memory is left for the cache.
 6. Hitrate and latency are measured once again.
 
- Implementation | Memory usage | Disk usage | Cold latency | Cold hitrate | Reclaim latency |
-----------------|--------------|------------|--------------|--------------|-----------------|
-`LazyFree`      |     4Gb      |      0     |     2.9s     |     23%      |      2.3s       |
-`Disk`          |     4Gb      |     4Gb    |     5.2s     |      0       |      2.2s       |
-`Anon` Full     |     4Gb      |      0     |      OOM     |     OOM      |       OOM       |
-`Anon` Small    |     1Gb      |      0     |     2.8s     |      6%      |      1.5s       |
-`Stub`          |      0       |      0     |     0.11s    |      0%      |      1.2s       |
-================|==============|============|==============|==============|=================|
-What is best    | `Stub`    | Any `Anon` |`LazyFree`|Depends on reconstruction cost|Depends on disk|
+ Implementation | Memory usage | Disk usage | Hot/Cold hitrate | Hot latency | Cold latency |
+----------------|--------------|------------|------------------|-------------|--------------|
+`LazyFree`      |     4Gb      |      0     |    45% / 23%     |    72ms     |      2.0s    |
+`Disk`          |     4Gb      |     4Gb    |   100% / 100%    |   428ms     |      4.7s    |
+`Anon` Full     |     4Gb      |      0     |      OOM         |     OOM     |       OOM    |
+`Anon` Small    |     1Gb      |      0     |   100% / 100%    |   125ms     |      1.8s    |
+`Stub`          |      0       |      0     |    0% / 0%       |     1ms     |      0%      |
+----------------|--------------|------------|------------------|-------------|--------------|
+Best option     | Not `Stub`!| Not `Disk` | Depends on refill vs disk costs | `LazyFree` | `LazyFree` or resizable `Anon` |
 
 Theoretical max hitrate:
 `(4Gb quota - 3Gb reclaim)/(3.5G cold set size) = 28%`
@@ -172,49 +172,49 @@ Overall, `LazyFree` is quite close to the theoretical limit. This all also heavi
 ```text
 ~> ./run_benchmark.sh
 
-== Report lazyfree, cache_size=4Gb, set_size=4Gb ==
+== Report lazyfree, capacity=4Gb, reclaim=3Gb ==
 hot_before_reclaim_hitrate=1.00
-hot_before_reclaim_latency=62ms
+hot_before_reclaim_latency=23ms
 cold_before_reclaim_hitrate=1.00
-cold_before_reclaim_latency=918ms   
-reclaim_latency=2309.12ms           
-hot_after_reclaim_hitrate=0.00
-hot_after_reclaim_latency=285ms
-cold_after_reclaim_hitrate=0.23     <---- or   
-cold_after_reclaim_latency=2981ms   <----
+cold_before_reclaim_latency=484ms
+reclaim_latency=2078.05ms           
+hot_after_reclaim_hitrate=0.45      <---- Higher than cold
+hot_after_reclaim_latency=72ms      
+cold_after_reclaim_hitrate=0.23     <---- 
+cold_after_reclaim_latency=2071ms   
 
-== Report disk, cache_size=4Gb, set_size=4Gb ==
+== Report disk, capacity=4Gb, reclaim=3Gb ==
 hot_before_reclaim_hitrate=1.00
-hot_before_reclaim_latency=43ms
-cold_before_reclaim_hitrate=1.00
-cold_before_reclaim_latency=665ms
-reclaim_latency=2266.80ms           <--- need slower disk!
-hot_after_reclaim_hitrate=1.00
-hot_after_reclaim_latency=415ms     
-cold_after_reclaim_hitrate=1.00     <--- 
-cold_after_reclaim_latency=5281ms   <--- Paging in more expensive than reconstruction
-
-== Report anon, cache_size=1Gb, set_size=4Gb == 
-hot_before_reclaim_hitrate=0.00
-hot_before_reclaim_latency=209ms
-cold_before_reclaim_hitrate=0.06    <--- Cache has to be very small
-cold_before_reclaim_latency=2804ms
-reclaim_latency=1512.10ms
-hot_after_reclaim_hitrate=0.00
-hot_after_reclaim_latency=221ms
-cold_after_reclaim_hitrate=0.06
-cold_after_reclaim_latency=2836ms
-
-== Report stub, cache_size=4Gb, set_size=4Gb ==
-hot_before_reclaim_hitrate=0.00
-hot_before_reclaim_latency=5ms
+hot_before_reclaim_latency=24ms
 cold_before_reclaim_hitrate=0.00
-cold_before_reclaim_latency=85ms
-reclaim_latency=1204.77ms       <--- Represents the testing overhead
+cold_before_reclaim_latency=9924ms
+reclaim_latency=2112.23ms           <--- This would be worse on slow disk 
+hot_after_reclaim_hitrate=1.00
+hot_after_reclaim_latency=428ms     <--- Much more than lazyfreee
+cold_after_reclaim_hitrate=1.00
+cold_after_reclaim_latency=4740ms   <--- Paging to disk is more expensive than reconstruction!
+
+== Report anon, capacity=1Gb, reclaim=3Gb ==
+hot_before_reclaim_hitrate=1.00     <--- Kernel managed to detect hot set!
+hot_before_reclaim_latency=18ms
+cold_before_reclaim_hitrate=0.00 
+cold_before_reclaim_latency=2106ms
+reclaim_latency=1420.27ms
 hot_after_reclaim_hitrate=0.00
-hot_after_reclaim_latency=7ms
+hot_after_reclaim_latency=125ms
+cold_after_reclaim_hitrate=0.08     <--- Cache has to be very small
+cold_after_reclaim_latency=1889ms   <--- Unaffected by reclaim
+
+== Report stub, capacity=4Gb, reclaim=3Gb ==
+hot_before_reclaim_hitrate=0.00
+hot_before_reclaim_latency=1ms
+cold_before_reclaim_hitrate=0.00
+cold_before_reclaim_latency=19ms
+reclaim_latency=1349.56ms           <--- Represents the testing overhead
+hot_after_reclaim_hitrate=0.00
+hot_after_reclaim_latency=1ms
 cold_after_reclaim_hitrate=0.00
-cold_after_reclaim_latency=114ms
+cold_after_reclaim_latency=19ms
 ```
 
 </details>

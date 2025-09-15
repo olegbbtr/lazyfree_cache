@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "fallthrough_cache.h"
+#include "random.h"
 #include "refill.h"
 
 
@@ -173,12 +174,13 @@ struct hot_cold_report run_hot_cold(struct fallthrough_cache* cache, size_t set_
     int attempts = 2;
     printf("Starting warmup %d times, hot %dx likely\n", attempts, factor);
     for (int i = 0; i < attempts; ++i) {
-        testlib_get_all(cache, &hot_set);
-        testlib_set_random_order(&hot_set);
-
-        for (int j = 0; j < factor; ++j) {
+        size_t rnd = random_next() % (factor + 1);
+        if (rnd == 0) {
             testlib_get_all(cache, &cold_set);
             testlib_set_random_order(&cold_set);
+        } else {
+            testlib_get_all(cache, &hot_set);
+            testlib_set_random_order(&hot_set);
         }
     }
 
@@ -193,9 +195,11 @@ struct hot_cold_report run_hot_cold(struct fallthrough_cache* cache, size_t set_
         report.reclaim_latency = (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1e6;
     }
 
+    testlib_set_random_order(&hot_set);
     printf("Measuring hot...\n");
     report.hot_after_reclaim = testlib_measure_set(cache, &hot_set);
 
+    testlib_set_random_order(&cold_set);
     printf("Measuring cold...\n");
     report.cold_after_reclaim = testlib_measure_set(cache, &cold_set);
 

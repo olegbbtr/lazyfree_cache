@@ -11,22 +11,24 @@
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        printf("Usage: %s <impl> <set_size_gb> <cache_size_gb>\n", argv[0]);       
-        printf("Impls: lazyfree, normal, anon\n");
+        printf("Usage: %s <impl> <capacity_gb> <reclaim_gb>\n", argv[0]);       
+        printf("Impls: lazyfree, normal, anon, stub\n");
         return 1;
     }
-    size_t set_size = atoll(argv[2]) * G;
-    if (set_size < 1) {
-        printf("Set size must be at least 1Gb\n");
+    float capacity_gb = atof(argv[2]);
+    float reclaim_gb = atof(argv[3]);
+    if (capacity_gb < 0.5) {
+        printf("Capacity must be at least 0.5Gb\n");
+        return 1;
+    }
+    if (reclaim_gb < 0.5) {
+        printf("Reclaim must be at least 0.5Gb\n");
         return 1;
     }
 
-    size_t cache_size = atoll(argv[3]) * G;
-    if (set_size < cache_size) {
-        printf("Set size should be more than cache size to warm up the cache\n");
-        return 1;
-    }
-
+    size_t capacity_bytes = capacity_gb * G;
+    size_t reclaim_bytes = reclaim_gb * G;
+    
     struct lazyfree_impl impl;
     if (strcmp(argv[1], "lazyfree") == 0) {
         impl = lazyfree_impl();
@@ -43,15 +45,13 @@ int main(int argc, char** argv) {
 
     random_rotate();
 
-    printf("\n== Benchmark: %s, cache_size=%zu GB ==\n", argv[1], cache_size/G);
-    
     ft_cache_t cache;
     ft_cache_init(&cache, impl,
-        cache_size/PAGE_SIZE, sizeof(uint64_t),
+        capacity_bytes/PAGE_SIZE, sizeof(uint64_t),
         refill_cb, NULL);
-    // run_full_set(cache, cache_size);
-    struct hot_cold_report report = run_hot_cold(&cache, set_size, set_size*0.75);
-    printf("\n== Report %s, cache_size=%zuGb, set_size=%zuGb ==\n", argv[1], cache_size/G, set_size/G);
+    
+    struct hot_cold_report report = run_hot_cold(&cache, 4*G, reclaim_bytes);
+    printf("\n== Report %s, capacity=%zuGb, reclaim=%zuGb ==\n", argv[1], capacity_bytes/G, reclaim_bytes/G);
     
     testlib_print_report(report.hot_before_reclaim, "hot_before_reclaim");
     testlib_print_report(report.cold_before_reclaim, "cold_before_reclaim");
