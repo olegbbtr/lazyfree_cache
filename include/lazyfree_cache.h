@@ -1,3 +1,5 @@
+#ifndef LAZYFREE_CACHE_H
+#define LAZYFREE_CACHE_H
 
 #include <assert.h>
 #include <stdint.h>
@@ -95,6 +97,4 @@ inline struct lazyfree_impl lazyfree_disk_impl() {
     return impl;
 }
 
-
-
-
+#endif

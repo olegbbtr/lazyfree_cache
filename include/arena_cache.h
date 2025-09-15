@@ -1,4 +1,5 @@
-
+#ifndef ARENA_CACHE_H
+#define ARENA_CACHE_H
 
 #include <stdint.h>
 
@@ -35,4 +36,7 @@ static struct lazyfree_impl arena_cache_impl = {
 
 
 };
+
+#endif
+
 

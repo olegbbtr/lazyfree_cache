@@ -9,14 +9,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-// #include "stb_ds.h"
-#include "cache.h"
 #include "hashmap.h"
+
+#include "lazyfree_cache.h"
 
 #include "bitset.h"
 #include "random.h"
 
-#include "lazyfree_cache.h"
 
 #define DEBUG_KEY 1609906849761488ul
 // #define DEBUG_KEY -1ul
@@ -298,7 +297,11 @@ static void drop_next_chunk(struct lazyfree_cache* cache) {
         hmap_remove(cache, chunk->keys[i]);
     }
     memset(chunk->keys, 0, chunk->len * sizeof(lazyfree_key_t));
-    cache->madv_impl(chunk->entries, cache->chunk_size);
+    int ret = madvise(chunk->entries, cache->chunk_size, MADV_DONTNEED);
+    if (ret != 0) {
+        printf("MADV_DONTNEED failed: %d\n", ret);
+        exit(1);
+    }
     
     cache->total_free_pages += (chunk->len - chunk->free_pages_count);
     

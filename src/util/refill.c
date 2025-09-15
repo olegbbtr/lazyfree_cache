@@ -2,6 +2,9 @@
 
 #include <stdint.h>
 
+
+struct refill_ctx refill_ctx;
+
 uint64_t refill_expected(uint64_t key) {
     return refill_ctx.seed + key;
 }

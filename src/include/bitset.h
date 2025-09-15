@@ -1,3 +1,6 @@
+#ifndef BITSET_H
+#define BITSET_H
+
 #include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -5,10 +8,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-// #include "stb_ds.h"
-
-#ifndef BITSET_H
-#define BITSET_H
 
 typedef uint8_t* bitset_t;
 

@@ -1,11 +1,10 @@
 #ifndef FALLTHROUGH_CACHE_H
 #define FALLTHROUGH_CACHE_H
 
-#include "cache.h"
-#include "bitset.h"
-
 #include <stdint.h>
 #include <stdbool.h>
+
+#include "cache.h"
 
 typedef void (*ft_refill_t)(void *opaque, uint64_t key, uint8_t *value);
 

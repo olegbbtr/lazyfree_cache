@@ -13,7 +13,7 @@
 int main(int argc, char** argv) {
     if (argc < 4) {
         printf("Usage: %s <impl> <set_size_gb> <cache_size_gb>\n", argv[0]);       
-        printf("Impls: lazyfree, normal, disk\n");
+        printf("Impls: lazyfree, normal, anon\n");
         return 1;
     }
     size_t set_size = atoll(argv[2]) * G;
@@ -33,7 +33,7 @@ int main(int argc, char** argv) {
         impl = lazyfree_impl();
     } else if (strcmp(argv[1], "disk") == 0) {
         impl = lazyfree_disk_impl();
-    } else if (strcmp(argv[1], "normal") == 0) {
+    } else if (strcmp(argv[1], "anon") == 0) {
         impl = lazyfree_anon_impl();
     } else {
         printf("Unknown impl: %s\n", argv[1]);
