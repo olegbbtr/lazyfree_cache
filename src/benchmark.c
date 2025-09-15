@@ -4,7 +4,7 @@
 #include <stdlib.h>
 
 #include "cache.h"
-#include "ft_cache.h"
+#include "fallthrough_cache.h"
 #include "lazyfree_cache.h"
 
 #include "testlib.h"
@@ -28,14 +28,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    struct cache_impl impl = lazyfree_cache_impl;
+    struct lazyfree_impl impl;
     if (strcmp(argv[1], "lazyfree") == 0) {
-        
+        impl = lazyfree_impl();
     } else if (strcmp(argv[1], "disk") == 0) {
-        impl.mmap_impl = mmap_file;
-        impl.madv_impl = madv_cold;
+        impl = lazyfree_disk_impl();
     } else if (strcmp(argv[1], "normal") == 0) {
-        impl.madv_impl = madv_noop;
+        impl = lazyfree_anon_impl();
     } else {
         printf("Unknown impl: %s\n", argv[1]);
         return 1;

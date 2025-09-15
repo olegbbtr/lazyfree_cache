@@ -4,10 +4,10 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "ft_cache.h"
+#include "fallthrough_cache.h"
 
 
-void ft_cache_init(struct fallthrough_cache *cache, struct cache_impl impl, 
+void ft_cache_init(struct fallthrough_cache *cache, struct lazyfree_impl impl, 
                    size_t num_entries, size_t entry_size,
                    ft_refill_t refill_cb, void *refill_opaque) {
     assert(entry_size <= PAGE_SIZE);
@@ -83,6 +83,7 @@ bool ft_cache_drop(ft_cache_t* cache,
 }
                   
 void ft_cache_report(ft_cache_t* cache) {
-    cache->impl.debug(cache->cache, false);
+    cache->impl.stats(cache->cache, true);
+    cache->impl.stats(cache->cache, false);
 }
 

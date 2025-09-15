@@ -20,4 +20,4 @@ run_test() {
 # sleep 5
 # run_test disk     4 4 5
 # sleep 5
-run_test normal   4 2 5 # Can only run with 1Gb cache
+run_test anon   4 2 5 # Can only run with 1Gb cache

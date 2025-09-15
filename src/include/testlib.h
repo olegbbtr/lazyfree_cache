@@ -9,7 +9,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "ft_cache.h"
+#include "fallthrough_cache.h"
 #include "refill.h"
 
 
@@ -104,7 +104,7 @@ static float testlib_drop_all(ft_cache_t *cache,
 
 void testlib_reclaim(size_t size) {
     printf("Reclaiming %zu Mb\n", size/M);
-    uint8_t *mem = mmap_normal(size);
+    uint8_t *mem = lazyfree_mmap_anon(size);
     for (size_t i = 0; i < size/PAGE_SIZE; ++i) {
         mem[i*PAGE_SIZE] = random_next();
     }
@@ -116,7 +116,7 @@ void testlib_reclaim_many(size_t chunks, size_t chunk_size) {
     uint8_t **mem = malloc(chunks * sizeof(uint8_t*));
     for (size_t i = 0; i < chunks; ++i) {
         // usleep(100*1000);
-        mem[i] = mmap_normal(chunk_size);
+        mem[i] = lazyfree_mmap_anon(chunk_size);
         for (size_t j = 0; j < chunk_size/PAGE_SIZE; ++j) {
             mem[i][j*PAGE_SIZE] = random_next();
         }

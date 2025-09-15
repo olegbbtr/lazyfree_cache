@@ -9,12 +9,11 @@
 
 
 // Cache capacity is in bytes. 
-// It should be significantly higher than actual available memory.
-// If the cache is full, it will start evicting random entries.
-cache_t lazyfree_cache_new(size_t cache_capacity, mmap_impl_t mmap_impl, madv_impl_t madv_impl);
+// If the cache is full, it will start evicting random chunks.
+lazyfree_cache_t lazyfree_cache_new(size_t cache_capacity, lazyfree_mmap_impl_t mmap_impl, lazyfree_madv_impl_t madv_impl);
 
 // Call after done using the cache.
-void lazyfree_cache_free(cache_t cache);
+void lazyfree_cache_free(lazyfree_cache_t cache);
 
 
 // == Low-level API ==
@@ -26,9 +25,9 @@ void lazyfree_cache_free(cache_t cache);
 //    Pointers are valid until then.
 //  - Returns true if the key has existing data.
 //    Returns false if the key was just allocated and is empty.
-bool lazyfree_cache_write_lock(cache_t cache, 
-                               cache_key_t key,
-                               uint8_t **value);
+bool lazyfree_write_lock(lazyfree_cache_t cache, 
+                         lazyfree_key_t key,
+                         uint8_t **value);
                            
 
 //  Optimistically lock the cache to read read from the page.
@@ -40,38 +39,62 @@ bool lazyfree_cache_write_lock(cache_t cache,
 //    Pointers are valid until then.
 //  - Returns true if the key has existing data.
 //    Returns false if the key is empty.
-bool lazyfree_cache_read_try_lock(cache_t cache, 
-                                  cache_key_t key,
-                                  uint8_t *head,
-                                  uint8_t **tail);
+bool lazyfree_read_try_lock(lazyfree_cache_t cache, 
+                            lazyfree_key_t key,
+                            uint8_t *head,
+                            uint8_t **tail);
 
 // Check if the read lock is still valid.
-bool lazyfree_cache_read_lock_check(cache_t cache);
+bool lazyfree_read_lock_check(lazyfree_cache_t cache);
+
+// Turn the read lock into write lock.
+void lazyfree_upgrade_lock(lazyfree_cache_t cache);
 
 // Unlock the cache.
 //  - If 'drop' is true, the key is dropped from the cache.
-void lazyfree_cache_unlock(cache_t cache, bool drop);
-
+void lazyfree_unlock(lazyfree_cache_t cache, bool drop);
 
 
 // == Extra API ==
 
-// Prints some stats and set verbose logging
-void lazyfree_cache_debug(cache_t cache, bool verbose);
+// Returns stats and sets verbose mode.
+struct lazyfree_stats lazyfree_fetch_stats(lazyfree_cache_t cache, bool verbose);
 
 
-// == Memory allocation ==
+
+// == Generic Implementation ==
+
+inline struct lazyfree_impl lazyfree_impl() {
+    struct lazyfree_impl impl = {
+        .new = lazyfree_cache_new,
+        .free = lazyfree_cache_free,
+        .write_lock = lazyfree_write_lock,
+        .read_try_lock = lazyfree_read_try_lock,
+        .read_lock_check = lazyfree_read_lock_check,
+        .unlock = lazyfree_unlock,
+        .stats = lazyfree_fetch_stats,
+    
+        .mmap_impl = lazyfree_mmap_anon,
+        .madv_impl = lazyfree_madv_free,
+    };    
+    return impl;
+}
+
+// Anonymous storage is the same: no MADV_FREE, no lock failures.
+inline struct lazyfree_impl lazyfree_anon_impl() {
+    struct lazyfree_impl impl = lazyfree_impl();
+    impl.madv_impl = NULL;
+    impl.read_lock_check = NULL;
+    return impl;
+}
+
+// Store pages in files.
+inline struct lazyfree_impl lazyfree_disk_impl() {
+    struct lazyfree_impl impl = lazyfree_anon_impl();
+    impl.mmap_impl = lazyfree_mmap_file;
+    return impl;
+}
 
 
-static struct cache_impl lazyfree_cache_impl = {
-    .new = lazyfree_cache_new,
-    .free = lazyfree_cache_free,
-    .write_lock = lazyfree_cache_write_lock,
-    .read_try_lock = lazyfree_cache_read_try_lock,
-    .read_lock_check = lazyfree_cache_read_lock_check,
-    .unlock = lazyfree_cache_unlock,
-    .debug = lazyfree_cache_debug,
 
-    .mmap_impl = mmap_normal,
-    .madv_impl = madv_lazyfree,
-};
+

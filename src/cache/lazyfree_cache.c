@@ -1,12 +1,16 @@
 #include <assert.h>
-#include <errno.h>
+#include <fcntl.h>
+#include <linux/limits.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 // #include "stb_ds.h"
+#include "cache.h"
 #include "hashmap.h"
 
 #include "bitset.h"
@@ -17,13 +21,8 @@
 #define DEBUG_KEY 1609906849761488ul
 // #define DEBUG_KEY -1ul
 
-
-#define NUMBER_OF_CHUNKS 8
-static_assert(NUMBER_OF_CHUNKS < (1 << 8), "Too many chunks");
-
-// This guarantees we switch chunks < 50% of the writes
-#define MIN_FREE_TOTAL_PAGES (2 * NUMBER_OF_CHUNKS)
-
+#define NUMBER_OF_CHUNKS 16
+static_assert(NUMBER_OF_CHUNKS < (1 << 7), "Too many chunks");
 
 struct discardable_entry {
     uint8_t head;
@@ -37,42 +36,41 @@ struct entry_descriptor {
     bool set;
     uint16_t padding;
 };
+static_assert(sizeof(struct entry_descriptor) == 8, "entry_descriptor size is not 8 bytes");
+
+static struct entry_descriptor EMPTY_DESC = { .chunk = -1, .index = -1 };
 
 struct chunk {
     struct discardable_entry* entries; // anonymous mmap size=CHUNK_SIZE
     bitset_t bit0;                     // malloc size=PAGES_PER_CHUNK/8 
     uint32_t* free_pages;              // malloc size=PAGES_PER_CHUNK
-    cache_key_t* keys;                 // malloc size=PAGES_PER_CHUNK
+    lazyfree_key_t* keys;              // malloc size=PAGES_PER_CHUNK
     uint32_t free_pages_count;
     uint32_t len;
 };
 
 struct lazyfree_cache {
-    madv_impl_t madv_impl;
+    lazyfree_madv_impl_t madv_impl;
     size_t cache_capacity;
+
+    struct chunk chunks[NUMBER_OF_CHUNKS];
     size_t pages_per_chunk;
     size_t chunk_size;
-
     size_t current_chunk_idx;
-    struct chunk chunks[NUMBER_OF_CHUNKS];
 
     struct hashmap_s map; 
 
     size_t total_free_pages;
+    lazyfree_key_t last_key;
 
-    cache_key_t last_key;
+    // Lock state
     uint8_t *locked_head;
     struct entry_descriptor locked_desc;
     bool locked_read;
     bool verbose;
 };
 
-
-
-static_assert(sizeof(struct entry_descriptor) == 8, "entry_descriptor size is not 8 bytes");
-static struct entry_descriptor EMPTY_DESC = { .chunk = -1, .index = -1 };
-
-static struct lazyfree_cache* cache_new(size_t cache_capacity, mmap_impl_t mmap_impl, madv_impl_t madv_impl) {
+static struct lazyfree_cache* cache_new(size_t cache_capacity, lazyfree_mmap_impl_t mmap_impl, lazyfree_madv_impl_t madv_impl) {
     struct lazyfree_cache* cache = malloc(sizeof(struct lazyfree_cache));
     memset(cache, 0, sizeof(struct lazyfree_cache));
 
@@ -108,7 +106,7 @@ static struct lazyfree_cache* cache_new(size_t cache_capacity, mmap_impl_t mmap_
     return cache;
 }
 
-void cache_free(struct lazyfree_cache* cache) {
+void lazyfree_cache_free(struct lazyfree_cache* cache) {
     for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
         munmap(cache->chunks[i].entries, cache->chunk_size);
         bitset_free(cache->chunks[i].bit0);
@@ -119,13 +117,25 @@ void cache_free(struct lazyfree_cache* cache) {
     free(cache);
 }
 
+static void print_stats(lazyfree_cache_t cache) {
+    struct lazyfree_cache* lazyfree_cache = (struct lazyfree_cache*) cache;
+    printf("Htable size: %u\n", hashmap_num_entries(&lazyfree_cache->map));
+    printf("Total free pages: %zu\n", lazyfree_cache->total_free_pages);
+    for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
+        struct chunk* chunk = &lazyfree_cache->chunks[i];
+        float ratio = (float) chunk->free_pages_count / (float) chunk->len;
+        printf("Chunk %zu: %u/%u (%.2f%%)\n", i, chunk->free_pages_count, chunk->len, ratio * 100);
+    }
+}
+
 // == Hashmap helpers ==
-union {
+
+static union {
     struct entry_descriptor desc;
     void* ptr;
 } u;
 
-static struct entry_descriptor hmap_get(struct lazyfree_cache* cache, cache_key_t key) {
+static struct entry_descriptor hmap_get(struct lazyfree_cache* cache, lazyfree_key_t key) {
     u.ptr = hashmap_get(&cache->map, &key, sizeof(key));
     if (key == DEBUG_KEY) {
         printf("DEBUG: HASHMAP GET %lu -> %d %d %d\n", key, u.desc.chunk, u.desc.index, u.desc.set);
@@ -136,7 +146,7 @@ static struct entry_descriptor hmap_get(struct lazyfree_cache* cache, cache_key_
     return EMPTY_DESC;
 }
 
-static void hmap_put(struct lazyfree_cache* cache, cache_key_t* key, struct entry_descriptor desc) {
+static void hmap_put(struct lazyfree_cache* cache, lazyfree_key_t* key, struct entry_descriptor desc) {
     u.ptr = 0;
     u.desc.chunk = desc.chunk;
     u.desc.index = desc.index;
@@ -150,23 +160,28 @@ static void hmap_put(struct lazyfree_cache* cache, cache_key_t* key, struct entr
     assert(desc2.set);
 }
 
-static void hmap_remove(struct lazyfree_cache* cache, cache_key_t key) {
+static void hmap_remove(struct lazyfree_cache* cache, lazyfree_key_t key) {
     if (key == DEBUG_KEY) {
         printf("DEBUG: HASHMAP REMOVE %lu, new size %u\n", key, hashmap_num_entries(&cache->map));
     }
     hashmap_remove(&cache->map, &key, sizeof(key));
 }
 
+
 // == Read lock implementation ==
 
 static void cache_drop(struct lazyfree_cache* cache, struct entry_descriptor desc) {
-    // printf("DEBUG: Dropping chunk %d, index %d\n", desc.chunk, desc.index);
+    if (cache->verbose) {
+        printf("DEBUG: Dropping chunk %d, index %d\n", desc.chunk, desc.index);
+    }
+    
     struct chunk* chunk = &cache->chunks[desc.chunk];
-    cache_key_t key = chunk->keys[desc.index];
+    lazyfree_key_t key = chunk->keys[desc.index];
     chunk->free_pages[chunk->free_pages_count++] = desc.index;
     if (chunk->free_pages_count > chunk->len) {
+
+        print_stats(cache);
         printf("DEBUG: Free pages count %u is greater than chunk len %u\n", chunk->free_pages_count, chunk->len);
-        lazyfree_cache_debug(cache, true);
         exit(1);
     }
     chunk->keys[desc.index] = 0;
@@ -183,8 +198,8 @@ static void cache_drop(struct lazyfree_cache* cache, struct entry_descriptor des
     // printf("Hmap size: %zu\n", hmlen(cache->map));
 }
 
-static bool cache_read_try_lock(struct lazyfree_cache* cache, 
-                               cache_key_t key,
+bool lazyfree_read_try_lock(lazyfree_cache_t cache, 
+                               lazyfree_key_t key,
                                uint8_t* head,
                                uint8_t** tail) {
     assert(cache->locked_head == NULL);
@@ -236,7 +251,7 @@ static bool cache_read_try_lock(struct lazyfree_cache* cache,
     return true;
 }
 
-static bool cache_read_lock_check(struct lazyfree_cache* cache) {
+bool lazyfree_read_lock_check(struct lazyfree_cache* cache) {
     assert(cache->locked_head != NULL);
     assert(cache->locked_desc.chunk != EMPTY_DESC.chunk);
     assert(cache->locked_read);
@@ -247,7 +262,7 @@ static bool cache_read_lock_check(struct lazyfree_cache* cache) {
     return true;
 }
 
-static void cache_read_unlock(struct lazyfree_cache* cache, bool drop) {
+static void read_cache_unlock(struct lazyfree_cache* cache, bool drop) {
     assert(cache->locked_head != NULL);
     assert(cache->locked_desc.chunk != EMPTY_DESC.chunk);
     assert(cache->locked_read);
@@ -266,22 +281,24 @@ static void cache_read_unlock(struct lazyfree_cache* cache, bool drop) {
 // == Write lock implementation ==
 
 static void drop_next_chunk(struct lazyfree_cache* cache) {
-    cache->current_chunk_idx = (cache->current_chunk_idx + 1) % NUMBER_OF_CHUNKS;
+    // Next chunk:
+    // cache->current_chunk_idx = (cache->current_chunk_idx + 1) % NUMBER_OF_CHUNKS;
+
+    // Random chunk:
+    cache->current_chunk_idx = random_next() % NUMBER_OF_CHUNKS;
+
     struct chunk* chunk = &cache->chunks[cache->current_chunk_idx];
         
     if (cache->verbose) {
         printf("DEBUG: Dropping chunk %zu\n", cache->current_chunk_idx);
-        lazyfree_cache_debug(cache, false);
+        print_stats(cache);
     }
+
     for (size_t i = 0; i < chunk->len; ++i) {
         hmap_remove(cache, chunk->keys[i]);
     }
-    memset(chunk->keys, 0, chunk->len * sizeof(cache_key_t));
-    int ret = madvise(chunk->entries, cache->chunk_size, MADV_DONTNEED);
-    if (ret != 0) {
-        perror("madvise failed");
-    }
-    assert(ret == 0);
+    memset(chunk->keys, 0, chunk->len * sizeof(lazyfree_key_t));
+    cache->madv_impl(chunk->entries, cache->chunk_size);
     
     cache->total_free_pages += (chunk->len - chunk->free_pages_count);
     
@@ -290,7 +307,9 @@ static void drop_next_chunk(struct lazyfree_cache* cache) {
 }
 
 static void advance_chunk(struct lazyfree_cache* cache) {
-    cache->madv_impl(cache->chunks[cache->current_chunk_idx].entries, cache->chunk_size);
+    if (cache->madv_impl != NULL) {
+        cache->madv_impl(cache->chunks[cache->current_chunk_idx].entries, cache->chunk_size);
+    }
     cache->current_chunk_idx = (cache->current_chunk_idx + 1) % NUMBER_OF_CHUNKS;
 
     // printf("DEBUG: Switched to chunk %zu\n", cache->current_chunk_idx);
@@ -333,9 +352,10 @@ static void take_write_lock(struct lazyfree_cache* cache,
     *value = (uint8_t*) entry;
 }
 
-static bool cache_write_lock(struct lazyfree_cache* cache, 
-                            cache_key_t key,
+bool lazyfree_write_lock(lazyfree_cache_t cache, 
+                            lazyfree_key_t key,
                             uint8_t **value) {
+    struct lazyfree_cache* lazyfree_cache = (struct lazyfree_cache*) cache;
     assert(cache->locked_head == NULL);
     assert(cache->locked_desc.chunk == EMPTY_DESC.chunk);
     assert(!cache->locked_read);
@@ -365,7 +385,7 @@ static bool cache_write_lock(struct lazyfree_cache* cache,
     }
 
     
-    if (cache->total_free_pages < MIN_FREE_TOTAL_PAGES) {
+    if (cache->total_free_pages == 0) {
         if (cache->verbose || key == DEBUG_KEY) {
             printf("No free pages, freeing up next chunk\n");
         }
@@ -393,7 +413,7 @@ static bool cache_write_lock(struct lazyfree_cache* cache,
         if (chunks_visited >= NUMBER_OF_CHUNKS) {
             // This means total_free_pages is not updated correctly
             printf("Failed to find free page\n");
-            lazyfree_cache_debug(cache, true);
+            print_stats(cache);
             exit(1);
         }
     }
@@ -444,59 +464,91 @@ static void cache_write_unlock(struct lazyfree_cache* cache, bool drop) {
 }
 
 // == Public functions ==
-cache_t lazyfree_cache_new(size_t cache_capacity, void* (*mmap_impl)(size_t size), void (*madv_impl)(void *memory, size_t size)) {
-    return cache_new(cache_capacity, mmap_impl, madv_impl);
-}
 
-void lazyfree_cache_free(cache_t cache) {
-    cache_free(cache);
-}
-
-bool lazyfree_cache_write_lock(cache_t cache, 
-                               cache_key_t key,
-                               uint8_t **value) {
-    return cache_write_lock(cache, key, value);
-}
-
-bool lazyfree_cache_read_try_lock(cache_t cache, 
-                                  cache_key_t key,
-                                  uint8_t* head,
-                                  uint8_t **tail) {
-    return cache_read_try_lock(cache, key, head, tail);
-}
-
-bool lazyfree_cache_read_lock_check(cache_t cache) {
-    return cache_read_lock_check(cache);
-}
-
-void lazyfree_cache_unlock(cache_t cache, bool drop) {
+void lazyfree_unlock(lazyfree_cache_t cache, bool drop) {
     struct lazyfree_cache* lazyfree_cache = (struct lazyfree_cache*) cache;
     if (lazyfree_cache->verbose) {
         printf("DEBUG: Unlocking key %lu, drop %d, locked_read %d\n", 
             lazyfree_cache->last_key, drop, lazyfree_cache->locked_read);
     }
     if (lazyfree_cache->locked_read) {
-        cache_read_unlock(lazyfree_cache, drop);
+        read_cache_unlock(lazyfree_cache, drop);
     } else {
         cache_write_unlock(lazyfree_cache, drop);
     }
 }
 
-// == Extra API ==
-static void print_stats(cache_t cache) {
-    struct lazyfree_cache* lazyfree_cache = (struct lazyfree_cache*) cache;
-    printf("Htable size: %u\n", hashmap_num_entries(&lazyfree_cache->map));
-    printf("Total free pages: %zu\n", lazyfree_cache->total_free_pages);
-    for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
-        struct chunk* chunk = &lazyfree_cache->chunks[i];
-        float ratio = (float) chunk->free_pages_count / (float) chunk->len;
-        printf("Chunk %zu: %u/%u (%.2f%%)\n", i, chunk->free_pages_count, chunk->len, ratio * 100);
-       
-    }
+
+lazyfree_cache_t lazyfree_cache_new(size_t cache_capacity, lazyfree_mmap_impl_t mmap_impl, lazyfree_madv_impl_t madv_impl) {
+    return cache_new(cache_capacity, mmap_impl, madv_impl);
 }
 
-void lazyfree_cache_debug(cache_t cache, bool verbose) {
+struct lazyfree_stats lazyfree_fetch_stats(lazyfree_cache_t cache, bool verbose) {
     struct lazyfree_cache* lazyfree_cache = (struct lazyfree_cache*) cache;
-    lazyfree_cache->verbose = verbose;
+    struct lazyfree_stats stats;
+    stats.total_pages = lazyfree_cache->cache_capacity / PAGE_SIZE;
+    stats.free_pages = lazyfree_cache->total_free_pages;
     print_stats(cache);
+    return stats;
+}
+
+
+// == Memory functions  ==
+
+void lazyfree_madv_free(void *memory, size_t size) {
+    int ret;
+
+    ret = madvise(memory, size, MADV_FREE);
+    assert(ret == 0);
+}
+
+void lazyfree_madv_cold(void *memory, size_t size) {
+    int ret = madvise(memory, size,  MADV_COLD);
+    assert(ret == 0);
+}
+
+void *lazyfree_mmap_anon(size_t size) {
+    void *addr = mmap(NULL, size, 
+                PROT_READ | PROT_WRITE, 
+                MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE,
+                -1, 0);
+    if (addr == MAP_FAILED) {
+        perror("mmap");
+        exit(1);
+    }
+
+    // int ret = madvise(addr, size, MADV_NOHUGEPAGE | MADV_WILLNEED);
+    // assert(ret == 0);
+    // printf("Anon mmap %zu Mb at %p\n", size / M, addr);
+    return addr;
+}
+
+void *lazyfree_mmap_file(size_t size) {
+    char filename[PATH_MAX];
+    mkdir("./tmp", 0755);
+    snprintf(filename, PATH_MAX, "./tmp/cache-%ld", random_next());
+
+
+    int fd = open(filename, O_RDWR | O_CREAT, 0644);
+    if (fd == -1) {
+        perror("open");
+        exit(1);
+    }
+
+    if (ftruncate(fd, size) == -1) {
+        perror("ftruncate");
+        exit(1);
+    }
+
+    void *addr = mmap(NULL, size, 
+        PROT_READ | PROT_WRITE, 
+        MAP_SHARED | MAP_NORESERVE, 
+        fd, 0);
+    if (addr == MAP_FAILED) {
+        perror("mmap");
+        exit(1);
+    }
+    close(fd);
+    lazyfree_madv_cold(addr, size);
+    return addr;
 }

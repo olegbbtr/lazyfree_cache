@@ -9,9 +9,8 @@
 #include <assert.h>
 #include <stdlib.h>
 
-#include "ft_cache.h"
+#include "fallthrough_cache.h"
 #include "lazyfree_cache.h"
-#include "random_cache.h"
 
 #include "random.h"
 #include "refill.h"
@@ -108,55 +107,53 @@ float check_hitrate(struct fallthrough_cache *cache, size_t size) {
 //     }
 // }
 
+size_t get_set_size(size_t memory_size) {
+    size_t num_entries = memory_size/PAGE_SIZE - 128;
+    size_t set_size = num_entries*PAGE_SIZE;
+    printf("Number of entries: %zu\n", num_entries);
+    return set_size;
+}    
+
+
 void suite_lazyfree(size_t memory_size, bool full) {
-    struct cache_impl impl = lazyfree_cache_impl;
-    impl.mmap_impl = mmap_normal;
-    impl.madv_impl = madv_lazyfree;
+    size_t set_size = get_set_size(memory_size);
 
-    size_t num_entries = memory_size/PAGE_SIZE;
-    size_t set_size = num_entries - 128;
-
+    struct lazyfree_impl impl = lazyfree_impl();
     ft_cache_t cache;
     ft_cache_init(&cache, impl, 
-        num_entries, sizeof(uint64_t), 
+        set_size/PAGE_SIZE, sizeof(uint64_t), 
         refill_cb, NULL);
 
 
     run_smoke_test(&cache);
-    // fallthrough_cache_debug(&cache, false);
 
-    // sleep(100);
-
-    // mem_pressure_test(cache_size, true);
     if (!full) {
         return;
     }
     
-    // fallthrough_cache_debug(&cache, true);
     float hitrate = check_hitrate(&cache, set_size);
     if (hitrate < 0.7) {
         printf("set_size=%zuMb hitrate=%.2f, expect >= 0.8\n", set_size/M, hitrate);
         exit(1);
     }
 
-    // Hitrate should be >15%
+    // 2x hitrate should be >15%
     hitrate = check_hitrate(&cache, 2*set_size);
     if (hitrate < 0.15) {
-        printf("set_size=%zuMb hitrate=%.2f, expect >= 0.15\n", set_size/M, hitrate);
+        printf("set_size=%zuMb hitrate=%.5f, expect >= 0.15\n", set_size/M, hitrate);
         exit(1);
     }
 }
 
-void suite_normal(size_t memory_size) {
-    struct cache_impl impl = lazyfree_cache_impl;
-    impl.mmap_impl = mmap_normal;
-    impl.madv_impl = madv_noop;
-    
-    size_t set_size = memory_size/PAGE_SIZE - 128;
+void suite_anon(size_t memory_size) {
+    struct lazyfree_impl impl = lazyfree_anon_impl();   
+    size_t set_size = get_set_size(memory_size);
     ft_cache_t cache;
+
     ft_cache_init(&cache, impl, 
-        set_size, sizeof(uint64_t), 
+        set_size/PAGE_SIZE, sizeof(uint64_t), 
         refill_cb, NULL);
+
     run_smoke_test(&cache);    
 
     float hitrate = check_hitrate(&cache, set_size);
@@ -167,14 +164,12 @@ void suite_normal(size_t memory_size) {
 }
 
 void suite_disk(size_t memory_size) {
-    struct cache_impl impl = lazyfree_cache_impl;
-    impl.mmap_impl = mmap_file;
-    impl.madv_impl = madv_noop;
-
-    size_t set_size = memory_size/PAGE_SIZE - 128;
+    struct lazyfree_impl impl = lazyfree_disk_impl();
+    size_t set_size = get_set_size(memory_size);
     ft_cache_t cache;
+
     ft_cache_init(&cache, impl, 
-        set_size, sizeof(uint64_t), 
+        set_size/PAGE_SIZE, sizeof(uint64_t), 
         refill_cb, NULL);
 
     run_smoke_test(&cache);
@@ -185,9 +180,12 @@ void suite_disk(size_t memory_size) {
 
 
 int main(int argc, char **argv) {
+    testlib_verbose = true;
+
+
     if (argc < 3) {
         printf("Usage: %s <suite> <memory_size_gb>\n", argv[0]);       
-        printf("Suites: lazyfree, lazyfree_full, normal, disk\n");
+        printf("Suites: lazyfree, lazyfree_full, anon, disk\n");
         return 1;
     }
     size_t memory_size_gb = atoll(argv[2]);
@@ -207,8 +205,8 @@ int main(int argc, char **argv) {
         suite_lazyfree(memory_size, false);
     } else if (strcmp(argv[1], "lazyfree_full") == 0) {
         suite_lazyfree(memory_size, true);
-    } else if (strcmp(argv[1], "normal") == 0) {
-        suite_normal(memory_size);
+    } else if (strcmp(argv[1], "anon") == 0) {
+        suite_anon(memory_size);
     } else if (strcmp(argv[1], "disk") == 0) {
         suite_disk(memory_size);
     } else {
