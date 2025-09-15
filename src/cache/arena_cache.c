@@ -37,7 +37,7 @@ void arena_cache_read_unlock(lazyfree_cache_t cache, lazyfree_rlock_t lock, bool
 // == Write Lock API ==
 
 // Allocates a new page in the cache.
-uint8_t *arena_cache_alloc(lazyfree_cache_t cache, lazyfree_key_t key) {
+void* arena_cache_alloc(lazyfree_cache_t cache, lazyfree_key_t key) {
     return NULL;
 }
 
@@ -45,8 +45,8 @@ uint8_t *arena_cache_alloc(lazyfree_cache_t cache, lazyfree_key_t key) {
 //   - Returns true if successfully upgraded.
 //   - Returns false if the page was freshly allocated.
 // After that, has to unlock with lazyfree_write_unlock.
-bool arena_cache_upgrade_lock(lazyfree_cache_t cache, lazyfree_rlock_t lock, uint8_t **value) {
-    return false;
+void* arena_cache_upgrade_lock(lazyfree_cache_t cache, lazyfree_rlock_t lock, uint8_t **value) {
+    return NULL;
 }
 
 // Unlocks the write lock.

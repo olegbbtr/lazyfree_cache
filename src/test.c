@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <stdlib.h>
 
+#include "cache.h"
 #include "fallthrough_cache.h"
 #include "lazyfree_cache.h"
 
@@ -70,6 +71,7 @@ float check_hitrate(struct fallthrough_cache *cache, size_t size) {
     }
     
     testlib_drop_all(cache, &keyset);
+    testlib_free_keyset(&keyset);
     return hitrate2;
 }
 
@@ -109,9 +111,7 @@ float check_hitrate(struct fallthrough_cache *cache, size_t size) {
 
 size_t get_set_size(size_t memory_size) {
     size_t num_entries = memory_size/PAGE_SIZE - 128;
-    size_t set_size = num_entries*PAGE_SIZE;
-    printf("Number of entries: %zu\n", num_entries);
-    return set_size;
+    return num_entries*PAGE_SIZE;
 }    
 
 
@@ -125,12 +125,18 @@ void suite_lazyfree(size_t memory_size, bool full) {
         refill_cb, NULL);
 
 
+    // ft_cache_debug(&cache, false);
     run_smoke_test(&cache);
 
+
+    ft_cache_destroy(&cache);
     if (!full) {
         return;
     }
     
+    ft_cache_init(&cache, impl, 
+        set_size/PAGE_SIZE, sizeof(uint64_t), 
+        refill_cb, NULL);
     float hitrate = check_hitrate(&cache, set_size);
     if (hitrate < 0.7) {
         printf("set_size=%zuMb hitrate=%.2f, expect >= 0.8\n", set_size/M, hitrate);
@@ -143,6 +149,7 @@ void suite_lazyfree(size_t memory_size, bool full) {
         printf("set_size=%zuMb hitrate=%.5f, expect >= 0.15\n", set_size/M, hitrate);
         exit(1);
     }
+    ft_cache_destroy(&cache);
 }
 
 void suite_anon(size_t memory_size) {
@@ -161,6 +168,7 @@ void suite_anon(size_t memory_size) {
         printf("set_size=%zuMb hitrate=%.2f, expect >= 1\n", set_size/M, hitrate);
         exit(1);
     }
+    ft_cache_destroy(&cache);
 }
 
 void suite_disk(size_t memory_size) {
@@ -176,11 +184,13 @@ void suite_disk(size_t memory_size) {
 
     float hitrate = check_hitrate(&cache, set_size);
     assert(hitrate == 1);
+    ft_cache_destroy(&cache);
 }
 
 
 int main(int argc, char **argv) {
     testlib_verbose = true;
+    lazyfree_tests();
 
 
     if (argc < 3) {

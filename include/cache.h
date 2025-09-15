@@ -24,14 +24,12 @@ struct lazyfree_stats {
 };
 
 typedef struct {
-    lazyfree_key_t key;  
-    bool active;
-    // Internal use
-    uint8_t _chunk;
-    uint8_t _padding;
-    // Data is two parts
-    uint8_t head;
-    uint8_t* tail;
+    uint16_t _index;    // Internal use
+    int8_t _chunk;      // Internal use
+
+    uint8_t head;       // First byte of the page
+    uint8_t* tail;      // [1:PAGE_SIZE]
+    lazyfree_key_t key; // key
 } lazyfree_rlock_t;  
 static_assert(sizeof(lazyfree_rlock_t) == 24, "");
 
@@ -40,14 +38,14 @@ struct lazyfree_impl {
     void (*free)(lazyfree_cache_t cache);
 
     // == Optimistic Read Lock API ==
-    lazyfree_rlock_t (*read_try_lock)(lazyfree_cache_t cache, lazyfree_key_t key);
-    bool (*read_lock_check)(lazyfree_cache_t cache, lazyfree_rlock_t lock);
-    void (*read_unlock)(lazyfree_cache_t cache, lazyfree_rlock_t lock, bool drop);
+    lazyfree_rlock_t (*read_lock)(lazyfree_cache_t cache, lazyfree_key_t key);
+    bool             (*read_lock_check)(lazyfree_cache_t cache, lazyfree_rlock_t lock);
+    void             (*read_unlock)(lazyfree_cache_t cache, lazyfree_rlock_t lock, bool drop);
 
     // == Write Lock API ==
-    bool (*upgrade_lock)(lazyfree_cache_t cache, lazyfree_rlock_t lock, uint8_t **value);
-    uint8_t* (*alloc)(lazyfree_cache_t cache, lazyfree_key_t key);
-    void (*write_unlock)(lazyfree_cache_t cache, bool drop);
+    void* (*write_upgrade)(lazyfree_cache_t cache, lazyfree_rlock_t* lock);
+    void* (*write_alloc)(lazyfree_cache_t cache, lazyfree_key_t key);
+    void     (*write_unlock)(lazyfree_cache_t cache, bool drop);
 
     // == Memory implementation ==
     lazyfree_mmap_impl_t mmap_impl;
@@ -57,6 +55,9 @@ struct lazyfree_impl {
     struct lazyfree_stats (*stats)(lazyfree_cache_t cache, bool verbose);
 };
 
+struct lazyfree_impl lazyfree_impl();
+struct lazyfree_impl lazyfree_anon_impl();
+struct lazyfree_impl lazyfree_disk_impl();
 
 // == Memory allocation ==
 

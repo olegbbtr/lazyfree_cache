@@ -42,7 +42,6 @@ void testlib_init_keyset(struct testlib_keyset *keyset, size_t cnt) {
     keyset->seed = random_next();
     keyset->cnt = cnt;
     keyset->permutation = malloc(cnt * sizeof(size_t));
-    printf("Allocated keyset permutation of size %zu\n", cnt);
   
     testlib_set_standard_order(keyset);
 }
@@ -70,7 +69,7 @@ static float testlib_get_all(ft_cache_t *cache,
     }
     float hitrate = ((float) keyset->cnt - (float) refill_ctx.count) / (float) keyset->cnt;
     if (testlib_verbose) {
-        printf("checked_pages%zu hitrate=%.2f%%\n", keyset->cnt, hitrate * 100);
+        printf("size=%zuMb hitrate=%.2f%%\n", keyset->cnt * PAGE_SIZE/M, hitrate * 100);
     }
     return hitrate;
 }
@@ -158,7 +157,7 @@ struct hot_cold_report {
 
 
 struct hot_cold_report run_hot_cold(struct fallthrough_cache* cache, size_t set_size, size_t reclaim_size) {
-    size_t hot_size = 512 * M;
+    size_t hot_size = 256 * M;
     size_t cold_size = (set_size - hot_size) - 1*M;
     if (testlib_verbose) {
         printf("Hot size: %zuMb, cold size: %zuMb\n", hot_size/M, cold_size/M);
@@ -213,6 +212,8 @@ struct hot_cold_report run_hot_cold(struct fallthrough_cache* cache, size_t set_
 
     testlib_drop_all(cache, &hot_set);
     testlib_drop_all(cache, &cold_set);
+    testlib_free_keyset(&hot_set);
+    testlib_free_keyset(&cold_set);
 
     return report;
 }

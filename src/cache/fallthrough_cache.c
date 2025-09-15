@@ -26,15 +26,16 @@ void ft_cache_destroy(struct fallthrough_cache* cache) {
     cache->impl.free(cache->cache);
 }
 
-static lazyfree_rlock_t maybe_get(struct fallthrough_cache* cache, 
+static lazyfree_rlock_t try_read(struct fallthrough_cache* cache, 
                       uint64_t key,
                       uint8_t *value) {
     lazyfree_rlock_t lock;
-    lock = cache->impl.read_try_lock(cache->cache, key);
-    if (!lock.active) {
+    lock = cache->impl.read_lock(cache->cache, key);
+    if (!lock.tail) {
         // Not found
         return lock;
     }
+    
     value[0] = lock.head;
     memcpy(value + 1, lock.tail, cache->entry_size - 1);
 
@@ -47,8 +48,9 @@ static lazyfree_rlock_t maybe_get(struct fallthrough_cache* cache,
 
 
 void ft_cache_get(ft_cache_t* cache, uint64_t key, uint8_t *value) {
-    lazyfree_rlock_t lock = maybe_get(cache, key, value);
-    if (lock.active) {
+    lazyfree_rlock_t lock = try_read(cache, key, value);
+    if (lock.tail) {
+        // Found
         cache->impl.read_unlock(cache->cache, lock, false);
         return;
     }
@@ -57,7 +59,7 @@ void ft_cache_get(ft_cache_t* cache, uint64_t key, uint8_t *value) {
     cache->refill_cb(cache->refill_opaque, key, value);
 
     // Write lock
-    uint8_t *page = cache->impl.alloc(cache->cache, key);
+    uint8_t *page = cache->impl.write_upgrade(cache->cache, &lock);
     memcpy(page, value, cache->entry_size);
     cache->impl.write_unlock(cache->cache, false);
 }
@@ -66,16 +68,17 @@ void ft_cache_get(ft_cache_t* cache, uint64_t key, uint8_t *value) {
 bool ft_cache_drop(ft_cache_t* cache, 
                             uint64_t key) {
     lazyfree_rlock_t lock;
-    lock = cache->impl.read_try_lock(cache->cache, key);
-    if (lock.active) {
+    lock = cache->impl.read_lock(cache->cache, key);
+    if (lock.tail) {
         cache->impl.read_unlock(cache->cache, lock, true);
         return true;
     }
     return false;
 }
                   
-void ft_cache_report(ft_cache_t* cache) {
-    cache->impl.stats(cache->cache, true);
-    cache->impl.stats(cache->cache, false);
+void ft_cache_debug(ft_cache_t* cache, bool verbose) {
+    struct lazyfree_stats stats = cache->impl.stats(cache->cache, verbose);
+    printf("Lazyfree stats: total_pages=%zu, free_pages=%zu\n", 
+           stats.total_pages, stats.free_pages);
 }
 

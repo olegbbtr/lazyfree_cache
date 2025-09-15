@@ -33,6 +33,6 @@ void ft_cache_get(ft_cache_t *cache,
 // Returns true if found, false if not found.
 bool ft_cache_drop(ft_cache_t *cache, lazyfree_key_t key);
 
-void ft_cache_report(ft_cache_t *cache);
+void ft_cache_debug(ft_cache_t *cache, bool verbose);
                 
 #endif
