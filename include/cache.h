@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <assert.h>
 
-// PAGE_SIZE should be equal to kernel page size.
+// PAGE_SIZE must be equal to kernel page size.
 #define PAGE_SIZE 4096
 
 

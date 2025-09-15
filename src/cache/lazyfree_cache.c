@@ -117,15 +117,17 @@ lazyfree_cache_t lazyfree_cache_new_ex(size_t cache_capacity,
         cache->chunks[i].keys = malloc(cache->pages_per_chunk * sizeof(uint64_t));
         assert(cache->chunks[i].keys != NULL);
     }
-    cache->total_free_pages = NUMBER_OF_CHUNKS * cache->pages_per_chunk;
-
-    cache->wlock_chunk = EMPTY_DESC.chunk;
-    
     hashmap_create_ex( (struct hashmap_create_options_s){
         .initial_capacity = NUMBER_OF_CHUNKS*cache->pages_per_chunk,
         .comparer = &exact_key_comparer,
         .hasher = &exact_key_hasher,
     }, &cache->map);
+    cache->key0.chunk = -1;
+
+    cache->total_free_pages = NUMBER_OF_CHUNKS * cache->pages_per_chunk;
+
+    cache->wlock_chunk = EMPTY_DESC.chunk;
+    
     return cache;
 }
 
@@ -170,6 +172,7 @@ static struct entry_descriptor hmap_get(struct lazyfree_cache* cache, lazyfree_k
         return cache->key0;
     }
     hmap_access.value = hashmap_get(&cache->map, (void*) (key), sizeof(key));
+    // printf("hmap_get %lu: %p\n", key, hmap_access.value);
     if (hmap_access.entry.set) {
         return hmap_access.desc;
     }
@@ -277,6 +280,7 @@ lazyfree_rlock_t lazyfree_read_lock(lazyfree_cache_t cache,
     if (cache->verbose || key == DEBUG_KEY) {
         printf("DEBUG: rlock key=%lu chunk=%d index=%d\n", key, desc.chunk, desc.index);
     }
+    
 
     if (chunk->keys[desc.index] != key) {
         if (cache->verbose || key == DEBUG_KEY) {

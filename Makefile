@@ -2,7 +2,7 @@ CC = clang
 CFLAGS = -g -Wall -Wextra -fno-omit-frame-pointer -O0 -march=native -std=gnu23 -Iinclude -Isrc/include
 DEV_FLAGS = -fsanitize=address,undefined \
 			-fsanitize-address-use-after-scope
-CFLAGS += $(DEV_FLAGS)
+# CFLAGS += $(DEV_FLAGS)
 
 SRCS = $(wildcard src/*/*.c)
 OBJS = $(patsubst src/%.c,build/%.o,$(SRCS))

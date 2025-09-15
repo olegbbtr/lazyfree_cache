@@ -4,21 +4,36 @@ This is an implementation of LazyFree cache in userspace.
 In this implementation, kernel can evict any page when there is memory pressure.
 It provides zero-copy API to allocate 4KB pages.
 
-This is possible due to the `MADV_FREE` ([madvise(2)](https://man7.org/linux/man-pages/man2/madvise.2.html)) flag. It is avaliable since Linux 4.5.
+This is possible due to the `MADV_FREE` ([madvise(2)](https://man7.org/linux/man-pages/man2/madvise.2.html)) flag. 
+It is avaliable since Linux 4.5.
+The semantics of the range under `MADV_FREE` is:
 
-This implementation can be useful if running on a system with occasional unpredictable memory pressure, such
-that all the data is reconstructable from other sources.
+- If the page was not evicted, all reads from the page return page data.
+- If the page was evicted, all reads from the page return zeros.
+
+This approach can be useful if running on a system with occasional unpredictable memory pressure, if the data stored in page is easily reconstructable
 
 ## LazyFree API
 
 [lazyfree_cache.h](include/lazyfree_cache.h) provides default LazyFree API.
 
 ```c
+
+// PAGE_SIZE must be equal to kernel page size.
+#define PAGE_SIZE 4096
+
 // == Core API ==
+
 typedef struct lazyfree_cache* lazyfree_cache_t;
-lazyfree_cache_t lazyfree_cache_new(size_t cache_capacity);
+
+// Create a new cache.
+// Return NULL on allocation failures.
+lazyfree_cache_t lazyfree_cache_new(size_t capacity_bytes);
+
+// Free the cache.
 void lazyfree_cache_free(lazyfree_cache_t cache);
 
+// Key type.
 typedef uint64_t lazyfree_key_t;
 
 
@@ -32,15 +47,18 @@ typedef struct {
     uint8_t* tail;      // [1:PAGE_SIZE]
 } lazyfree_rlock_t;  
 
+// This macro can be used to check if the call resulted in an allocation of a new page.
+#define LAZYFREE_RLOCK_IS_BLANK(lock) (lock.tail == NULL)
+
 // Take an optimistic read lock.
 // Returns the handle with two fields:
 //    head - page[0]
-//    tail - ptr to page[1:PAGE_SIZE] if found, NULL otherwise
+//    tail - ptr to page[1:PAGE_SIZE] if existed, NULL if blank
 // The lock can be upgraded to a write lock.
 lazyfree_rlock_t lazyfree_read_lock(lazyfree_cache_t cache, lazyfree_key_t key);
 
 // Check the lock is still valid.
-// Needs to be used after every read from tail, to verify the page has not been dropped.
+// Must be called after reading the payload, to verify the validity of the read.
 bool lazyfree_read_lock_check(lazyfree_cache_t cache, lazyfree_rlock_t lock);
 
 // Unlock the read lock.
@@ -53,7 +71,7 @@ void lazyfree_read_unlock(lazyfree_cache_t cache, lazyfree_rlock_t lock, bool dr
 // There are two ways to get a write lock:
 
 // Allocates a new page in the cache.
-// Must not be called for existing keys, instead use upgrade.
+// Must not be called for existing keys, instead lazyfree_write_upgrade must be used.
 // Returns ptr to page[0:PAGE_SIZE]
 void* lazyfree_write_alloc(lazyfree_cache_t cache, lazyfree_key_t key);
 
@@ -104,18 +122,20 @@ bool ft_cache_drop(ft_cache_t *cache, lazyfree_key_t key);
 
 ## Implementation details
 
-The cache consists of a fixed number of chunks (e.g. 32).
-There is one persistent annonymous allocation per chunk.
-Chunks are arranged in a circular order.
+The cache consists of a fixed number of chunks (e.g. 32), chunks are arranged in a circular order.
+There is one persistent anonymous allocation per chunk.
 New page allocations happen only to the current chunk.
-After the current chunk has no more free pages,  `madvise(..., MADV_FREE);` is called.
+After the current chunk has no more free pages,  `madvise(..., MADV_FREE);` is called, and the next chunk becomes current.
 That memory can now be reclaimed by kernel at any moment.
 
 Fortunately, this happens at page granularity, and we can detect if page was reset.
 bit0 on every page is set to 1 and is used to detect page resets.
 That is why the first byte is provided separately.
 
-The locking mechanism is designed in a way to minimize hashmap lookups over the lifecycle of a key.
+Also, the cache performes eviction if there are no free pages left. 
+If it happens to the key, the lock_check will return false as well.
+
+The locking mechanism is designed in such way to minimize hashmap lookups over the lifecycle of a key.
 
 ## Benchmarks
 
@@ -172,7 +192,7 @@ reclaim_latency=2266.80ms           <--- need slower disk!
 hot_after_reclaim_hitrate=1.00
 hot_after_reclaim_latency=415ms     
 cold_after_reclaim_hitrate=1.00     <--- 
-cold_after_reclaim_latency=5281ms   <--- Paging in more expensive than reconstrictuion
+cold_after_reclaim_latency=5281ms   <--- Paging in more expensive than reconstruction
 
 == Report anon, cache_size=1Gb, set_size=4Gb == 
 hot_before_reclaim_hitrate=0.00
@@ -203,7 +223,7 @@ There are also regression tests via `./run_tests.sh`.
 
 ## Similar technologies
 
-- Would be achivable with inside kernel with it's memory primitives. Having it in userspace is more convienient.
+- Would be achievable with inside kernel with it's memory primitives. Having it in userspace is more convenient.
 - Chromium has [discardable memory](https://chromium.googlesource.com/chromium/src/%2B/main/docs/memory-infra/probe-cc.md?utm_source=chatgpt.com#Discardable-Category).
 - [Purgable](https://github.com/skeeto/purgeable) does mmap on every allocation - too slow.
 
@@ -219,7 +239,7 @@ Using LazyCache might be preferable in order to:
 - Avoid the need for node to have persistent storage.
 - Don't spend latency on disk IO when cheaper reconstruction is avaliable.
 
-## Futher improvements
+## Further improvements
 
 1. Right now, the eviction policy is very simple: it evicts random chunk.
    - Perhaps, LFU on chunks is easy enough to implement.
@@ -229,4 +249,7 @@ Using LazyCache might be preferable in order to:
      Thus, all evictions would be guided by memory pressure.
 2. Already has RWLock semantics, can have multiple writers if writing to different chunks.
 3. Fallthrough cache should be able to pack multiple entries into a single page. They would be evicted together.
-4. Should have mesurements with different reclaim sizes.
+4. Should have measurements with different reclaim sizes.
+
+Other than that, the library is ready to be integrated into other projects,
+subject to more correctness verification and performance measurements.
