@@ -168,7 +168,7 @@ struct hot_cold_report {
 
 struct hot_cold_report run_hot_cold(struct fallthrough_cache* cache, size_t set_size, size_t reclaim_size) {
     size_t hot_size = 512 * M;
-    size_t cold_size = (reclaim_size - hot_size) - 1*M;
+    size_t cold_size = (set_size - hot_size) - 1*M;
     if (testlib_verbose) {
         printf("Hot size: %zuMb, cold size: %zuMb\n", hot_size/M, cold_size/M);
     }
@@ -183,12 +183,10 @@ struct hot_cold_report run_hot_cold(struct fallthrough_cache* cache, size_t set_
     int attempts = 2;
     printf("Starting warmup %d times, hot %dx likely\n", attempts, factor);
     for (int i = 0; i < attempts; ++i) {
-        printf("Hot %d: ", i);
         testlib_get_all(cache, &hot_set);
         testlib_set_random_order(&hot_set);
 
         for (int j = 0; j < factor; ++j) {
-            printf("Cold %d: ", i);
             testlib_get_all(cache, &cold_set);
             testlib_set_random_order(&cold_set);
         }
@@ -205,7 +203,10 @@ struct hot_cold_report run_hot_cold(struct fallthrough_cache* cache, size_t set_
         report.reclaim_latency = (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1e6;
     }
 
+    printf("Measuring hot...\n");
     report.hot_after_reclaim = testlib_measure_set(cache, &hot_set);
+
+    printf("Measuring cold...\n");
     report.cold_after_reclaim = testlib_measure_set(cache, &cold_set);
 
     // printf("\nStarting final check %d times, core is %dx\n", attempts, factor);

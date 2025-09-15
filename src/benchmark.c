@@ -21,10 +21,10 @@ int main(int argc, char** argv) {
         printf("Set size must be at least 1Gb\n");
         return 1;
     }
-    size_t cache_size = atoll(argv[3]) * G;
 
-    if (cache_size < set_size) {
-        printf("Cache size must be at least set size\n");
+    size_t cache_size = atoll(argv[3]) * G;
+    if (set_size < cache_size) {
+        printf("Set size should be more than cache size to warm up the cache\n");
         return 1;
     }
 
@@ -50,10 +50,11 @@ int main(int argc, char** argv) {
         cache_size/PAGE_SIZE, sizeof(uint64_t),
         refill_cb, NULL);
     // run_full_set(cache, cache_size);
-    struct hot_cold_report report = run_hot_cold(&cache, set_size, cache_size);
+    struct hot_cold_report report = run_hot_cold(&cache, set_size, set_size*0.75);
     printf("\n== Report ==\n");
     printf("impl=%s\n", argv[1]);
     printf("cache_size_gb=%zu\n", cache_size/G);
+    printf("set_size_gb=%zu\n", set_size/G);
     
     testlib_print_report(report.hot_before_reclaim, "hot_before_reclaim");
     testlib_print_report(report.cold_before_reclaim, "cold_before_reclaim");

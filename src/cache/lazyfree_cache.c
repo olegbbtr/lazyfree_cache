@@ -266,7 +266,7 @@ static void cache_read_unlock(struct lazyfree_cache* cache, bool drop) {
 // == Write lock implementation ==
 
 static void drop_next_chunk(struct lazyfree_cache* cache) {
-    cache->current_chunk_idx++;
+    cache->current_chunk_idx = (cache->current_chunk_idx + 1) % NUMBER_OF_CHUNKS;
     struct chunk* chunk = &cache->chunks[cache->current_chunk_idx];
         
     if (cache->verbose) {
@@ -277,7 +277,10 @@ static void drop_next_chunk(struct lazyfree_cache* cache) {
         hmap_remove(cache, chunk->keys[i]);
     }
     memset(chunk->keys, 0, chunk->len * sizeof(cache_key_t));
-    int ret = madvise(chunk->entries, chunk->len * sizeof(struct discardable_entry), MADV_DONTNEED);
+    int ret = madvise(chunk->entries, cache->chunk_size, MADV_DONTNEED);
+    if (ret != 0) {
+        perror("madvise failed");
+    }
     assert(ret == 0);
     
     cache->total_free_pages += (chunk->len - chunk->free_pages_count);
