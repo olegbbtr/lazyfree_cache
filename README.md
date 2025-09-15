@@ -1,8 +1,8 @@
 # LazyFree userspace cache
 
 This is an implementation of LazyFree cache in userspace.
-It provides zero-copy API to allocate pages.
 In this implementation, kernel can evict any page when there is memory pressure.
+It provides zero-copy API to allocate 4KB pages.
 
 This is possible due to the `MADV_FREE` ([madvise(2)](https://man7.org/linux/man-pages/man2/madvise.2.html)) flag. It is avaliable since Linux 4.5.
 
