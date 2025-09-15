@@ -49,8 +49,10 @@ bool lazyfree_read_try_lock(lazyfree_cache_t cache,
 // Check if the read lock is still valid.
 bool lazyfree_read_lock_check(lazyfree_cache_t cache);
 
-// Turn the read lock into write lock.
-void lazyfree_upgrade_lock(lazyfree_cache_t cache);
+// Upgrade the read lock into write lock.
+//   - Returns true if successfully upgraded.
+//   - Returns false if the page was freshly allocated.
+bool lazyfree_upgrade_lock(lazyfree_cache_t cache);
 
 // Unlock the cache.
 //  - If 'drop' is true, the key is dropped from the cache.

@@ -63,7 +63,7 @@ struct lazyfree_cache {
     lazyfree_key_t last_key;
 
     // Lock state
-    uint8_t *locked_head;
+    struct discardable_entry* locked_entry;
     struct entry_descriptor locked_desc;
     bool locked_read;
     bool verbose;
@@ -166,6 +166,19 @@ static void hmap_remove(struct lazyfree_cache* cache, lazyfree_key_t key) {
     hashmap_remove(&cache->map, &key, sizeof(key));
 }
 
+// == Bitset helpers
+
+static void bit_to_head(struct chunk* chunk, struct entry_descriptor desc, uint8_t* head) {
+    if (!bitset_get(chunk->bit0, desc.index)) {
+        *head &= ~1ul;
+    }
+}
+
+static void bit_from_head(struct chunk* chunk, struct entry_descriptor desc, uint8_t* head) {
+    bool bit0 = (*head & 1) != 0;
+    bitset_put(chunk->bit0, desc.index, bit0);
+    *head |= 1;
+}
 
 // == Read lock implementation ==
 
@@ -201,7 +214,7 @@ bool lazyfree_read_try_lock(lazyfree_cache_t cache,
                                lazyfree_key_t key,
                                uint8_t* head,
                                uint8_t** tail) {
-    assert(cache->locked_head == NULL);
+    assert(cache->locked_entry == NULL);
     assert(cache->locked_desc.chunk == EMPTY_DESC.chunk);
     if (cache->verbose) {
         printf("DEBUG: Locking key %lu for read\n", key);
@@ -238,12 +251,10 @@ bool lazyfree_read_try_lock(lazyfree_cache_t cache,
         return false;
     }
 
-    if (!bitset_get(chunk->bit0, desc.index)) {
-        *head &= ~1ul;
-    }
+    bit_to_head(chunk, desc, head);
 
     *tail = entry->tail;
-    cache->locked_head = &entry->head;
+    cache->locked_entry = entry;
     cache->locked_desc = desc;
     cache->last_key = key;
     cache->locked_read = true;
@@ -251,10 +262,10 @@ bool lazyfree_read_try_lock(lazyfree_cache_t cache,
 }
 
 bool lazyfree_read_lock_check(struct lazyfree_cache* cache) {
-    assert(cache->locked_head != NULL);
+    assert(cache->locked_entry != NULL);
     assert(cache->locked_desc.chunk != EMPTY_DESC.chunk);
     assert(cache->locked_read);
-    if (cache->verbose && !*cache->locked_head) {
+    if (cache->verbose && !cache->locked_entry->head) {
         printf("Key was evicted during read\n");
         return false;
     }
@@ -262,7 +273,7 @@ bool lazyfree_read_lock_check(struct lazyfree_cache* cache) {
 }
 
 static void read_cache_unlock(struct lazyfree_cache* cache, bool drop) {
-    assert(cache->locked_head != NULL);
+    assert(cache->locked_entry != NULL);
     assert(cache->locked_desc.chunk != EMPTY_DESC.chunk);
     assert(cache->locked_read);
     if (cache->verbose) {
@@ -271,7 +282,7 @@ static void read_cache_unlock(struct lazyfree_cache* cache, bool drop) {
     if (drop) {
         cache_drop(cache, cache->locked_desc);
     }
-    cache->locked_head = NULL;
+    cache->locked_entry = NULL;
     cache->locked_desc = EMPTY_DESC;
     cache->locked_read = false;
 }
@@ -351,7 +362,7 @@ static void take_write_lock(struct lazyfree_cache* cache,
     struct chunk* chunk = &cache->chunks[desc.chunk];
     struct discardable_entry* entry = &chunk->entries[desc.index];
     cache->locked_desc = desc;
-    cache->locked_head = &entry->head;
+    cache->locked_entry = entry;
     *value = (uint8_t*) entry;
 }
 
@@ -359,7 +370,7 @@ bool lazyfree_write_lock(lazyfree_cache_t cache,
                             lazyfree_key_t key,
                             uint8_t **value) {
     struct lazyfree_cache* lazyfree_cache = (struct lazyfree_cache*) cache;
-    assert(cache->locked_head == NULL);
+    assert(cache->locked_entry == NULL);
     assert(cache->locked_desc.chunk == EMPTY_DESC.chunk);
     assert(!cache->locked_read);
     if (cache->verbose) {
@@ -379,15 +390,13 @@ bool lazyfree_write_lock(lazyfree_cache_t cache,
         }
         struct chunk* chunk = &cache->chunks[desc.chunk];
 
-        if (!bitset_get(chunk->bit0, desc.index)) {
-            *cache->locked_head &= ~1ul;
-        }
-
+        bit_to_head(chunk, desc, &cache->locked_entry->head);
         take_write_lock(cache, desc, value);
         return true;
     }
 
-    
+    // Looking for a free page
+
     if (cache->total_free_pages == 0) {
         if (cache->verbose || key == DEBUG_KEY) {
             printf("No free pages, freeing up next chunk\n");
@@ -431,7 +440,7 @@ bool lazyfree_write_lock(lazyfree_cache_t cache,
 
 static void cache_write_unlock(struct lazyfree_cache* cache, bool drop) {
     assert(cache->locked_desc.chunk != EMPTY_DESC.chunk);
-    assert(cache->locked_head != NULL);
+    assert(cache->locked_entry != NULL);
     assert(!cache->locked_read);
 
     if (cache->verbose || cache->last_key == DEBUG_KEY) {
@@ -442,16 +451,8 @@ static void cache_write_unlock(struct lazyfree_cache* cache, bool drop) {
         cache_drop(cache, cache->locked_desc);
     } else {
         // Move bit0 from head to bit0
-        struct chunk* chunk = &cache->chunks[cache->locked_desc.chunk];        
-        bool bit0 = (*cache->locked_head & 1) != 0;
-        bitset_put(chunk->bit0, cache->locked_desc.index, bit0);
-        if (!bit0) {
-            if (bitset_get(chunk->bit0, cache->locked_desc.index)) {
-                // Move bit0 from bitset to head
-                printf("DEBUG: WTF\n");
-            } 
-        }
-        *cache->locked_head |= 1;
+        struct chunk* chunk = &cache->chunks[cache->locked_desc.chunk];      
+        bit_from_head(chunk, cache->locked_desc, &cache->locked_entry->head);  
 
         if (cache->verbose || cache->last_key == DEBUG_KEY) {
             printf("DEBUG: Putting key %lu, chunk %d, index %d\n", cache->last_key, cache->locked_desc.chunk, cache->locked_desc.index);
@@ -462,25 +463,51 @@ static void cache_write_unlock(struct lazyfree_cache* cache, bool drop) {
     }
 
     cache->locked_desc = EMPTY_DESC;
-    cache->locked_head = NULL;
+    cache->locked_entry = NULL;
     cache->locked_read = false;
 }
 
-// == Public functions ==
+// == General lock functions ==
 
 void lazyfree_unlock(lazyfree_cache_t cache, bool drop) {
-    struct lazyfree_cache* lazyfree_cache = (struct lazyfree_cache*) cache;
-    if (lazyfree_cache->verbose) {
+    if (cache->verbose) {
         printf("DEBUG: Unlocking key %lu, drop %d, locked_read %d\n", 
-            lazyfree_cache->last_key, drop, lazyfree_cache->locked_read);
+            cache->last_key, drop, cache->locked_read);
     }
-    if (lazyfree_cache->locked_read) {
-        read_cache_unlock(lazyfree_cache, drop);
+    if (cache->locked_read) {
+        read_cache_unlock(cache, drop);
     } else {
-        cache_write_unlock(lazyfree_cache, drop);
+        cache_write_unlock(cache, drop);
     }
 }
 
+
+bool lazyfree_upgrade_lock(lazyfree_cache_t cache) {
+    assert(cache->locked_read);
+    assert(cache->locked_desc.chunk != EMPTY_DESC.chunk);
+    assert(cache->locked_entry != NULL);
+
+    struct chunk* chunk = &cache->chunks[cache->locked_desc.chunk];
+
+
+    cache->locked_read = false;
+
+    // Use second byte to lock the page
+    uint8_t byte1 = cache->locked_entry->tail[0];
+    cache->locked_entry->tail[0] = 1;
+
+    if (!lazyfree_read_lock_check(cache)) {
+        cache->locked_entry->tail[0] = 0;
+        return false;
+    }
+
+    cache->locked_entry->tail[0] = byte1;
+    bit_from_head(chunk, cache->locked_desc, &cache->locked_entry->head);  
+    return true;
+}
+
+
+// == Public functions ==
 
 lazyfree_cache_t lazyfree_cache_new(size_t cache_capacity, lazyfree_mmap_impl_t mmap_impl, lazyfree_madv_impl_t madv_impl) {
     return cache_new(cache_capacity, mmap_impl, madv_impl);
