@@ -5,7 +5,6 @@
 
 #include "cache.h"
 #include "fallthrough_cache.h"
-#include "stub_cache.h"
 
 #include "testlib.h"
 
