@@ -70,8 +70,8 @@ struct lazyfree_cache {
     bool verbose;
 };
 
-static int exact_key_comparer(const void *a, hashmap_uint32_t a_len,
-                              const void *b, hashmap_uint32_t b_len) {
+static int exact_key_comparer(const void *a, hashmap_uint32_t /*a_len*/,
+                              const void *b, hashmap_uint32_t /*b_len*/) {
     return a == b;
 }
 
@@ -86,7 +86,7 @@ static uint32_t hash_u64_to_u32(uint64_t key) {
 
 static hashmap_uint32_t exact_key_hasher(hashmap_uint32_t seed,
                                          const void *key,
-                                         hashmap_uint32_t key_len) {
+                                         hashmap_uint32_t /*key_len*/) {
     return seed + hash_u64_to_u32((uint64_t) key) + 1;
 }
 
@@ -242,7 +242,6 @@ static void cache_drop(struct lazyfree_cache* cache, struct entry_descriptor des
     }
     
     struct chunk* chunk = &cache->chunks[desc.chunk];
-    lazyfree_key_t key = chunk->keys[desc.index];
     chunk->free_pages[chunk->free_pages_count++] = desc.index;
     if (chunk->free_pages_count > chunk->len) {
 

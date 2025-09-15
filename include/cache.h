@@ -33,6 +33,9 @@ typedef struct {
 } lazyfree_rlock_t;  
 static_assert(sizeof(lazyfree_rlock_t) == 24, "");
 
+// Use this to check if the entry is present in the cache.
+#define LOCK_ENTRY_FOUND(lock) ((lock)->tail != NULL)
+
 struct lazyfree_impl {
     lazyfree_cache_t (*new)(size_t cache_size, lazyfree_mmap_impl_t mmap_impl, lazyfree_madv_impl_t madv_impl);
     void (*free)(lazyfree_cache_t cache);
@@ -58,6 +61,7 @@ struct lazyfree_impl {
 struct lazyfree_impl lazyfree_impl();
 struct lazyfree_impl lazyfree_anon_impl();
 struct lazyfree_impl lazyfree_disk_impl();
+struct lazyfree_impl lazyfree_stub_impl();
 
 // == Memory allocation ==
 

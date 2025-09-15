@@ -5,7 +5,7 @@
 
 #include "cache.h"
 #include "fallthrough_cache.h"
-#include "lazyfree_cache.h"
+#include "stub_cache.h"
 
 #include "testlib.h"
 
@@ -35,6 +35,8 @@ int main(int argc, char** argv) {
         impl = lazyfree_disk_impl();
     } else if (strcmp(argv[1], "anon") == 0) {
         impl = lazyfree_anon_impl();
+    } else if (strcmp(argv[1], "stub") == 0) {
+        impl = lazyfree_stub_impl();
     } else {
         printf("Unknown impl: %s\n", argv[1]);
         return 1;

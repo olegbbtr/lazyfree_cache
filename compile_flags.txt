@@ -1,2 +1,3 @@
 -Iinclude
 -Isrc/include
+ -std=gnu23
