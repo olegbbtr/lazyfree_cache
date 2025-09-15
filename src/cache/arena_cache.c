@@ -23,19 +23,34 @@ void arena_cache_free(lazyfree_cache_t lfcache) {
     free(cache);
 }
 
-bool arena_cache_write_lock(lazyfree_cache_t lfcache, 
-                             lazyfree_key_t key,
-                             uint8_t **value) {
-   return false;
+
+// == Read Lock API ==
+
+lazyfree_rlock_t arena_cache_read_lock(lazyfree_cache_t cache, lazyfree_key_t key) {
+    return (lazyfree_rlock_t){ .tail = NULL };
 }
 
-bool arena_cache_read_lock(lazyfree_cache_t lfcache, 
-                            lazyfree_key_t key,
-                            uint8_t* head,
-                            uint8_t **tail) {
+void arena_cache_read_unlock(lazyfree_cache_t cache, lazyfree_rlock_t lock, bool drop) {
+    return;
+}
+
+// == Write Lock API ==
+
+// Allocates a new page in the cache.
+uint8_t *arena_cache_alloc(lazyfree_cache_t cache, lazyfree_key_t key) {
+    return NULL;
+}
+
+// Upgrade the read lock into write lock.
+//   - Returns true if successfully upgraded.
+//   - Returns false if the page was freshly allocated.
+// After that, has to unlock with lazyfree_write_unlock.
+bool arena_cache_upgrade_lock(lazyfree_cache_t cache, lazyfree_rlock_t lock, uint8_t **value) {
     return false;
 }
 
-void arena_cache_unlock(lazyfree_cache_t lfcache, bool drop) {
+// Unlocks the write lock.
+// If drop is true, drops the page.
+void arena_cache_write_unlock(lazyfree_cache_t cache, bool drop) {
     return;
 }

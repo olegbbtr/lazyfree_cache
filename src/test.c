@@ -23,7 +23,7 @@ void run_smoke_test(struct fallthrough_cache *cache) {
 
     uint64_t keys[SMOKE_TEST_CNT];
     for (size_t i = 0; i < SMOKE_TEST_CNT; ++i) {
-        keys[i] = random_next() + i;
+        keys[i] = i;
         uint64_t value;
         ft_cache_get(cache, keys[i], (uint8_t*) &value);
 

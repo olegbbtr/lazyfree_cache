@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "fallthrough_cache.h"
+#include "cache.h"
 
 
 void ft_cache_init(struct fallthrough_cache *cache, struct lazyfree_impl impl, 
@@ -25,58 +26,49 @@ void ft_cache_destroy(struct fallthrough_cache* cache) {
     cache->impl.free(cache->cache);
 }
 
-static void put(struct fallthrough_cache* cache,
-                uint64_t key,
-                uint8_t *value) {
-    uint8_t *page;
-
-    cache->impl.write_lock(cache->cache, key, &page);
-    memcpy(page, value, cache->entry_size);
-    cache->impl.unlock(cache->cache, false);
-}
-
-
-static bool maybe_get(struct fallthrough_cache* cache, 
+static lazyfree_rlock_t maybe_get(struct fallthrough_cache* cache, 
                       uint64_t key,
                       uint8_t *value) {
-
-    uint8_t head;
-    uint8_t *tail;
-    bool ok = cache->impl.read_try_lock(cache->cache, key, &head, &tail);
-    if (!ok) {
+    lazyfree_rlock_t lock;
+    lock = cache->impl.read_try_lock(cache->cache, key);
+    if (!lock.active) {
         // Not found
-        return false;
+        return lock;
     }
-    value[0] = head;
-    memcpy(value + 1, tail, cache->entry_size - 1);
+    value[0] = lock.head;
+    memcpy(value + 1, lock.tail, cache->entry_size - 1);
 
-    ok = true;
     if (cache->impl.read_lock_check != NULL && 
-        !cache->impl.read_lock_check(cache->cache)) {
+        !cache->impl.read_lock_check(cache->cache, lock)) {
         printf("\nFALLTHROUGH READ LOCK CHECK FAILED\n");
-        ok = false;
     }
-    cache->impl.unlock(cache->cache, false);
-    return ok;
+    return lock;
 }
 
 
 void ft_cache_get(ft_cache_t* cache, uint64_t key, uint8_t *value) {
-    if (maybe_get(cache, key, value)) {
+    lazyfree_rlock_t lock = maybe_get(cache, key, value);
+    if (lock.active) {
+        cache->impl.read_unlock(cache->cache, lock, false);
         return;
     }
+
+    // Cache miss
     cache->refill_cb(cache->refill_opaque, key, value);
-    put(cache, key, value);
+
+    // Write lock
+    uint8_t *page = cache->impl.alloc(cache->cache, key);
+    memcpy(page, value, cache->entry_size);
+    cache->impl.write_unlock(cache->cache, false);
 }
 
 
 bool ft_cache_drop(ft_cache_t* cache, 
                             uint64_t key) {
-    uint8_t head;
-    uint8_t *tail;
-    bool found = cache->impl.read_try_lock(cache->cache, key, &head, &tail);
-    if (found) {
-        cache->impl.unlock(cache->cache, true);
+    lazyfree_rlock_t lock;
+    lock = cache->impl.read_try_lock(cache->cache, key);
+    if (lock.active) {
+        cache->impl.read_unlock(cache->cache, lock, true);
         return true;
     }
     return false;

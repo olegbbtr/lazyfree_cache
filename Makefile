@@ -1,5 +1,5 @@
 CC = clang
-CFLAGS = -g -Wall -Wextra -fno-omit-frame-pointer -Ofast -march=native -std=gnu11 -Iinclude -Isrc/include
+CFLAGS = -g -Wall -Wextra -fno-omit-frame-pointer -O3 -march=native -std=gnu11 -Iinclude -Isrc/include
 DEV_FLAGS = -fsanitize=address,undefined \
 			-fsanitize-address-use-after-scope
 # CFLAGS += $(DEV_FLAGS)
@@ -33,7 +33,7 @@ clean:
 
 perf: build/benchmark
 	sudo perf record -F 999 -g -- ./build/benchmark lazyfree 4 1
-	perf report
+	sudo perf report
 
 
 # all: asan run

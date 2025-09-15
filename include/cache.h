@@ -22,32 +22,37 @@ struct lazyfree_stats {
     size_t free_pages;
 };
 
+typedef struct {
+    lazyfree_key_t key;  
+    bool active;
+    // Internal use
+    uint8_t _chunk;
+    // Data is two parts
+    uint8_t head;
+    uint8_t* tail;
+} lazyfree_rlock_t;  
+
+// static_assert(sizeof(lazyfree_rlock_t) == 16, "");
+
 struct lazyfree_impl {
     lazyfree_cache_t (*new)(size_t cache_size, lazyfree_mmap_impl_t mmap_impl, lazyfree_madv_impl_t madv_impl);
     void (*free)(lazyfree_cache_t cache);
 
-    // Locks the key for write.
-    // Returns true if the key is found.
-    bool (*write_lock)(lazyfree_cache_t cache, lazyfree_key_t key, uint8_t **value);
+    // == Optimistic Read Lock API ==
+    lazyfree_rlock_t (*read_try_lock)(lazyfree_cache_t cache, lazyfree_key_t key);
+    bool (*read_lock_check)(lazyfree_cache_t cache, lazyfree_rlock_t lock);
+    void (*read_unlock)(lazyfree_cache_t cache, lazyfree_rlock_t lock, bool drop);
 
-    // Locks the key optimistically for read.
-    // Returns true if the key is found.
-    bool (*read_try_lock)(lazyfree_cache_t cache, lazyfree_key_t key, uint8_t *head, uint8_t **tail);
-    
-    // Checks if the read lock is still valid.
-    bool (*read_lock_check)(lazyfree_cache_t cache);
-    
-    // Unlocks the key.
-    void (*unlock)(lazyfree_cache_t cache, bool drop);
+    // == Write Lock API ==
+    bool (*upgrade_lock)(lazyfree_cache_t cache, lazyfree_rlock_t lock, uint8_t **value);
+    uint8_t* (*alloc)(lazyfree_cache_t cache, lazyfree_key_t key);
+    void (*write_unlock)(lazyfree_cache_t cache, bool drop);
 
-
-    // Allocate memory for the cache.
+    // == Memory implementation ==
     lazyfree_mmap_impl_t mmap_impl;
-
-    // Advise the kernel about the memory when done writing to the chunk.
     lazyfree_madv_impl_t madv_impl;
 
-    // Returns stats about the cache.
+    // == Extra API ==
     struct lazyfree_stats (*stats)(lazyfree_cache_t cache, bool verbose);
 };
 
