@@ -105,6 +105,10 @@ bool ft_cache_drop(ft_cache_t *cache, lazyfree_key_t key);
 void ft_cache_debug(ft_cache_t *cache, bool verbose);
 ```
 
+### Other generic implementations
+
+
+
 ### Other headers
 
 - [cache.h](include/cache.h) - generic cache interface.

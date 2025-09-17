@@ -7,6 +7,8 @@
 #include <string.h>
 
 
+// ================================ Building blocks ================================
+
 typedef struct lazyfree_cache* lazyfree_cache_t;
 typedef uint64_t lazyfree_key_t;
 
@@ -18,7 +20,7 @@ struct lazyfree_stats {
     size_t free_pages;
 };
 
-// ========= Generic cache ============
+// ================================= Generic cache =================================
 
 // PAGE_SIZE must be equal to kernel page size.
 #define PAGE_SIZE 4096
@@ -60,10 +62,18 @@ struct lazyfree_impl {
     struct lazyfree_stats (*stats)(lazyfree_cache_t cache, bool verbose);
 };
 
-// Implementations
+// ================================ Implementations ================================
+
+// Default implementation
 struct lazyfree_impl lazyfree_impl();
+
+// Uses normal memory for storage
 struct lazyfree_impl lazyfree_anon_impl();
+
+// Creates files in ./tmp folder for storage
 struct lazyfree_impl lazyfree_disk_impl();
+
+// Stores no data, returns only invalid read locks
 struct lazyfree_impl lazyfree_stub_impl();
 
 // Inline implementation for better performance.

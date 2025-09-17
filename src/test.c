@@ -120,9 +120,7 @@ void suite_lazyfree(size_t memory_size, bool full) {
 
     struct lazyfree_impl impl = lazyfree_impl();
     ft_cache_t cache;
-    ft_cache_init(&cache, impl, 
-        set_size/PAGE_SIZE, sizeof(uint64_t), 
-        refill_cb, NULL);
+    ft_cache_init(&cache, impl, refill_cb, NULL, set_size/PAGE_SIZE, sizeof(uint64_t));
 
 
     // ft_cache_debug(&cache, false);
@@ -134,9 +132,7 @@ void suite_lazyfree(size_t memory_size, bool full) {
         return;
     }
     
-    ft_cache_init(&cache, impl, 
-        set_size/PAGE_SIZE, sizeof(uint64_t), 
-        refill_cb, NULL);
+    ft_cache_init(&cache, impl, refill_cb, NULL, set_size/PAGE_SIZE, sizeof(uint64_t));
     float hitrate = check_hitrate(&cache, set_size);
     if (hitrate < 0.7) {
         printf("set_size=%zuMb hitrate=%.2f, expect >= 0.8\n", set_size/M, hitrate);
@@ -157,9 +153,7 @@ void suite_anon(size_t memory_size) {
     size_t set_size = get_set_size(memory_size);
     ft_cache_t cache;
 
-    ft_cache_init(&cache, impl, 
-        set_size/PAGE_SIZE, sizeof(uint64_t), 
-        refill_cb, NULL);
+    ft_cache_init(&cache, impl, refill_cb, NULL, set_size/PAGE_SIZE, sizeof(uint64_t));
 
     run_smoke_test(&cache);    
 
@@ -176,9 +170,7 @@ void suite_disk(size_t memory_size) {
     size_t set_size = get_set_size(memory_size);
     ft_cache_t cache;
 
-    ft_cache_init(&cache, impl, 
-        set_size/PAGE_SIZE, sizeof(uint64_t), 
-        refill_cb, NULL);
+    ft_cache_init(&cache, impl, refill_cb, NULL, set_size/PAGE_SIZE, sizeof(uint64_t));
 
     run_smoke_test(&cache);
 

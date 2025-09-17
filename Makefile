@@ -7,17 +7,16 @@ CFLAGS += $(CFLAGS_DEV_EXTRA)
 SRCS = $(wildcard src/*/*.c)
 OBJS = $(patsubst src/%.c,build/%.o,$(SRCS))
 
-.PHONY: all build run clean
-all: clean build
+.PHONY: all build-all run clean
+all: clean build-all
 
-build: build/test build/benchmark
+build-all: build/test build/benchmark
 
 clean:
 	rm -rf build
 	rm -rf ./tmp
 	test -f perf.data && sudo rm -rf perf.data		   || true
 	test -f perf.data.old && sudo rm -rf perf.data.old || true
-	mkdir -p build
 
 run: 
 	./run_tests.sh
@@ -34,7 +33,6 @@ build/%.o: src/%.c | build build/cache build/util
 
 build build/cache build/util:
 	mkdir -p $@
-
 
 perf: build/benchmark
 	sudo perf record -F 999 -g -b -- ./build/benchmark lazyfree 4 1

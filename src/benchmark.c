@@ -46,9 +46,7 @@ int main(int argc, char** argv) {
     random_rotate();
 
     ft_cache_t cache;
-    ft_cache_init(&cache, impl,
-        capacity_bytes/PAGE_SIZE, sizeof(uint64_t),
-        refill_cb, NULL);
+    ft_cache_init(&cache, impl, refill_cb, NULL, capacity_bytes/PAGE_SIZE, sizeof(uint64_t));
     
     struct hot_cold_report report = run_hot_cold(&cache, 4*G, reclaim_bytes);
     printf("\n== Report %s, capacity=%zuGb, reclaim=%zuGb ==\n", argv[1], capacity_bytes/G, reclaim_bytes/G);

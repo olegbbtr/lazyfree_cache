@@ -9,13 +9,13 @@
 
 #include "cache.h"
 
-// === Lazyfree Cache API ===
+// ================================ Core API =====================================
 
 lazyfree_cache_t lazyfree_cache_new(size_t cache_capacity);
 
 void lazyfree_cache_free(lazyfree_cache_t cache);
 
-// == Read Lock API ==
+// ================================ Read Lock API ================================
 // This might look complex, but it is necessary to support zero-copy reads.
 
 // Take an optimistic read lock.
@@ -24,7 +24,7 @@ lazyfree_rlock_t lazyfree_read_lock(lazyfree_cache_t cache, lazyfree_key_t key);
 // If drop is true, drops the page.
 void lazyfree_read_unlock(lazyfree_cache_t cache, lazyfree_rlock_t lock, bool drop);
 
-// == Write Lock API ==
+// ================================ Write Lock API ===============================
 // Only one page can be locked for write at the time.
 // There are two ways to get a write lock:
 
@@ -38,7 +38,7 @@ void* lazyfree_write_upgrade(lazyfree_cache_t cache, lazyfree_rlock_t* lock);
 // If drop is true, drops the page.
 void lazyfree_write_unlock(lazyfree_cache_t cache, bool drop);
 
-// == Behavior details ==
+// ================================ Behavior details =============================
 // If the cache is full, it will start evicting random chunks.
 //
 // Provides RWLock semantics:
@@ -47,7 +47,7 @@ void lazyfree_write_unlock(lazyfree_cache_t cache, bool drop);
 //
 // Must call all functions from the critical section.
 
-// == Extra API ==
+// ================================ Extra API ===================================
 
 // Crete cache with custom memory implementation.
 lazyfree_cache_t lazyfree_cache_new_ex(size_t cache_capacity, 
