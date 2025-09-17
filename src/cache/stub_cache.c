@@ -1,7 +1,10 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "cache.h"
 #include "stub_cache.h"
+
+#include "util.h"
 
 
 uint8_t EMPTY_PAGE[PAGE_SIZE];
@@ -22,15 +25,9 @@ void stub_cache_free(lazyfree_cache_t lfcache) {
 lazyfree_rlock_t stub_cache_read_lock(lazyfree_cache_t cache, lazyfree_key_t key) {
     UNUSED(cache);
     UNUSED(key);
-    return (lazyfree_rlock_t){ .tail = NULL };
+    return (lazyfree_rlock_t){ .head = NULL, .tail = 0 };
 }
 
-bool stub_cache_read_lock_check(lazyfree_cache_t cache, lazyfree_rlock_t lock) {
-    UNUSED(cache);
-    UNUSED(lock);
-    // Read lock is never valid
-    return false;
-}
 
 void stub_cache_read_unlock(lazyfree_cache_t cache, lazyfree_rlock_t lock, bool drop) {
     UNUSED(cache);
@@ -57,6 +54,7 @@ void* stub_cache_write_upgrade(lazyfree_cache_t cache, lazyfree_rlock_t* lock) {
 void stub_cache_write_unlock(lazyfree_cache_t cache, bool drop) {
     UNUSED(cache);
     UNUSED(drop);
+    EMPTY_PAGE[PAGE_SIZE-1] = 0; // Evict the page
     return;
 }
 
@@ -66,7 +64,6 @@ struct lazyfree_impl lazyfree_stub_impl() {
     .free = stub_cache_free,
 
     .read_lock = stub_cache_read_lock,
-    .read_lock_check = stub_cache_read_lock_check,
     .read_unlock = stub_cache_read_unlock,
 
     .write_upgrade = stub_cache_write_upgrade,

@@ -1,8 +1,7 @@
-#include "refill.h"
-
 #include <stdint.h>
-#include "cache.h"
 
+#include "refill.h"
+#include "util.h"
 
 struct refill_ctx refill_ctx;
 

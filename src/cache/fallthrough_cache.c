@@ -26,33 +26,22 @@ void ft_cache_destroy(struct fallthrough_cache* cache) {
     cache->impl.free(cache->cache);
 }
 
-static lazyfree_rlock_t try_read(struct fallthrough_cache* cache, 
-                      uint64_t key,
-                      uint8_t *value) {
-    lazyfree_rlock_t lock;
-    lock = cache->impl.read_lock(cache->cache, key);
-    if (!lock.tail) {
-        // Not found
-        return lock;
-    }
-    
-    value[0] = lock.head;
-    memcpy(value + 1, lock.tail, cache->entry_size - 1);
-
-    if (cache->impl.read_lock_check != NULL && 
-        !cache->impl.read_lock_check(cache->cache, lock)) {
-        printf("\nFALLTHROUGH READ LOCK CHECK FAILED\n");
-    }
-    return lock;
-}
-
-
 void ft_cache_get(ft_cache_t* cache, uint64_t key, uint8_t *value) {
-    lazyfree_rlock_t lock = try_read(cache, key, value);
-    if (lock.tail) {
+    lazyfree_rlock_t lock = cache->impl.read_lock(cache->cache, key);
+    if (!LAZYFREE_LOCK_IS_BLANK(lock)) {
         // Found
-        cache->impl.read_unlock(cache->cache, lock, false);
-        return;
+
+        lazyfree_read(value, lock, PAGE_SIZE-cache->entry_size, cache->entry_size);
+
+        if (LAZYFREE_LOCK_IS_VALID(lock)) {
+            // Check successful
+            lazyfree_read(value, lock, PAGE_SIZE-cache->entry_size, cache->entry_size);
+            cache->impl.read_unlock(cache->cache, lock, false);
+            return;
+        }
+
+        printf("\nFALLTHROUGH READ LOCK CHECK FAILED\n");
+        exit(1);
     }
 
     // Cache miss
@@ -60,16 +49,15 @@ void ft_cache_get(ft_cache_t* cache, uint64_t key, uint8_t *value) {
 
     // Write lock
     uint8_t *page = cache->impl.write_upgrade(cache->cache, &lock);
-    memcpy(page, value, cache->entry_size);
+    memcpy(page+PAGE_SIZE-cache->entry_size, value, cache->entry_size); // Write to the end of the page
     cache->impl.write_unlock(cache->cache, false);
 }
 
 
 bool ft_cache_drop(ft_cache_t* cache, 
                             uint64_t key) {
-    lazyfree_rlock_t lock;
-    lock = cache->impl.read_lock(cache->cache, key);
-    if (lock.tail) {
+    lazyfree_rlock_t lock = cache->impl.read_lock(cache->cache, key);
+    if (!LAZYFREE_LOCK_IS_BLANK(lock)) {
         cache->impl.read_unlock(cache->cache, lock, true);
         return true;
     }

@@ -13,6 +13,7 @@
 #include "fallthrough_cache.h"
 #include "lazyfree_cache.h"
 
+#include "util.h"
 #include "random.h"
 #include "refill.h"
 #include "testlib.h"
@@ -21,10 +22,9 @@
 #define SMOKE_TEST_CNT 10
 void run_smoke_test(struct fallthrough_cache *cache) {
     refill_ctx.count = 0;
-
     uint64_t keys[SMOKE_TEST_CNT];
     for (size_t i = 0; i < SMOKE_TEST_CNT; ++i) {
-        keys[i] = i;
+        keys[i] = i+1234;
         uint64_t value;
         ft_cache_get(cache, keys[i], (uint8_t*) &value);
 

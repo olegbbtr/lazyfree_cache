@@ -60,6 +60,7 @@ int main(int argc, char** argv) {
 
     testlib_print_report(report.hot_after_reclaim, "hot_after_reclaim");
     testlib_print_report(report.cold_after_reclaim, "cold_after_reclaim");
+    printf("\n");
     
     ft_cache_destroy(&cache);
 }

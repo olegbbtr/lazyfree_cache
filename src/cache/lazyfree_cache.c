@@ -2,6 +2,8 @@
 #include <fcntl.h>
 #include <linux/limits.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -10,22 +12,22 @@
 #include <unistd.h>
 
 #include "cache.h"
-#include "hashmap.h"
-
 #include "lazyfree_cache.h"
 
+#include "util.h"
+#include "hashmap.h"
 #include "bitset.h"
 #include "random.h"
 
 
 #define DEBUG_KEY -1ul
 
-#define NUMBER_OF_CHUNKS 16
+#define NUMBER_OF_CHUNKS 32
 static_assert(NUMBER_OF_CHUNKS < (1 << 7), "Too many chunks");
 
 struct discardable_entry {
-    uint8_t head;
-    uint8_t tail[PAGE_SIZE-1];
+    uint8_t head[PAGE_SIZE-1];
+    uint8_t tail;
 };
 static_assert(sizeof(struct discardable_entry) == PAGE_SIZE, "Discardable entry size is not equal to page size");
 
@@ -36,8 +38,22 @@ struct entry_descriptor {
 };
 static_assert(sizeof(struct entry_descriptor) == 8, "entry_descriptor size is not 8 bytes");
 
+typedef struct {
+    uint8_t *head;     // [0:PAGE_SIZE-1]
+    uint8_t tail;      // last byte of the page
+
+    int8_t _chunk;
+    uint16_t _index;
+    lazyfree_key_t _key;    
+} rlock_impl_t;
+static_assert(sizeof(rlock_impl_t) == 24, "rlock_impl_t size is not 24 bytes");
+static_assert(sizeof(lazyfree_rlock_t) == 24, "lazyfree_rlock_t size is not 24 bytes");
+static_assert(offsetof(lazyfree_rlock_t, head) == offsetof(rlock_impl_t, head), "lazyfree_rlock_t and rlock_impl_t have different head offsets");
+static_assert(offsetof(lazyfree_rlock_t, tail) == offsetof(rlock_impl_t, tail), "lazyfree_rlock_t and rlock_impl_t have different tail offsets");
+
+
 static struct entry_descriptor EMPTY_DESC = { .chunk = -1 };
-static lazyfree_rlock_t EMPTY_LOCK = { .tail = NULL, ._chunk = -1};
+static lazyfree_rlock_t EMPTY_LOCK = { .head = NULL, .tail = 0 };
 
 struct chunk {
     struct discardable_entry* entries; // anonymous mmap size=CHUNK_SIZE
@@ -199,29 +215,29 @@ static void hmap_remove(struct lazyfree_cache* cache, lazyfree_key_t key) {
 
 // == Bitset helpers
 
-static void bit_to_head(struct chunk* chunk, uint32_t index, uint8_t* head) {
+static void bit_to_tail(struct chunk* chunk, uint32_t index, uint8_t* tail) {
     if (!bitset_get(chunk->bit0, index)) {
-        *head &= ~1ul;
+        *tail &= ~1; // set the last bit to 0
     }
 }
 
-static void bit_from_head(struct chunk* chunk, uint32_t index, uint8_t* head) {
-    bool bit0 = (*head & 1) != 0;
+static void bit_from_tail(struct chunk* chunk, uint32_t index, uint8_t* tail) {
+    bool bit0 = (*tail & 1) != 0;
     bitset_put(chunk->bit0, index, bit0);
-    *head |= 1;
+    *tail |= 1;
 }
 
 // == rlock helpers ==
 
-uint32_t rlock_to_index(struct chunk* chunk, lazyfree_rlock_t lock) {
-    struct discardable_entry* entry = (struct discardable_entry*) (lock.tail - 1);
+uint32_t rlock_to_index(struct chunk* chunk, rlock_impl_t lock) {
+    struct discardable_entry* entry = (struct discardable_entry*) (lock.head);
     return entry - chunk->entries;
 }
 
-bool rlock_check_head(struct lazyfree_cache* cache, lazyfree_rlock_t lock) {
+bool rlock_check_tail(struct lazyfree_cache* cache, rlock_impl_t lock) {
     struct chunk* chunk = &cache->chunks[lock._chunk];
     uint32_t index = rlock_to_index(chunk, lock);
-    if (!chunk->entries[index].head) {
+    if (!chunk->entries[index].tail) {
         if (cache->verbose) {
             printf("Key was evicted during read\n");
         }
@@ -230,7 +246,7 @@ bool rlock_check_head(struct lazyfree_cache* cache, lazyfree_rlock_t lock) {
     return true;
 }
 
-bool rlock_check_key(struct lazyfree_cache* cache, lazyfree_rlock_t lock) {
+bool rlock_check_key(struct lazyfree_cache* cache, rlock_impl_t lock) {
     struct chunk* chunk = &cache->chunks[lock._chunk];
     uint32_t index = rlock_to_index(chunk, lock);
     if (chunk->keys[index] != lock._key) {
@@ -269,13 +285,15 @@ lazyfree_rlock_t lazyfree_read_lock(lazyfree_cache_t cache,
 
     assert(cache->wlock_chunk == EMPTY_DESC.chunk);
   
-    lazyfree_rlock_t rlock = EMPTY_LOCK;
-    rlock._key = key;
+    lazyfree_rlock_t lock = EMPTY_LOCK;
+    rlock_impl_t *lock_impl = (rlock_impl_t*) &lock;
+
+    lock_impl->_key = key;
     if (desc.chunk == EMPTY_DESC.chunk) {
         if (cache->verbose) {
             printf("Key %lu not found\n", key);
         }
-        return rlock;
+        return lock;
     }
     struct chunk* chunk = &cache->chunks[desc.chunk];
     struct discardable_entry* entry = &chunk->entries[desc.index];
@@ -289,33 +307,34 @@ lazyfree_rlock_t lazyfree_read_lock(lazyfree_cache_t cache,
         if (cache->verbose || key == DEBUG_KEY) {
             printf("Key %lu was evicted by dropping the chunk\n", key);
         }
-        return rlock;
+        return lock;
     }   
 
-    rlock._index = desc.index;
-    rlock._chunk = desc.chunk;
-    rlock.head = entry->head;
+    lock_impl->_index = desc.index;
+    lock_impl->_chunk = desc.chunk;
+    lock_impl->head = entry->head;
     
-    if (entry->head == 0) {
+    if (entry->tail == 0) {
         if (cache->verbose || key == DEBUG_KEY) {
             printf("Key %lu was evicted by kernel\n", key);
         }
 
-        rlock.tail = NULL;
-        return rlock;
+        lock_impl->head = NULL;
+        return lock;
     }
 
-    rlock.tail = entry->tail;
-    bit_to_head(chunk, desc.index, &rlock.head);
-    return rlock;
+    lock_impl->tail = entry->tail;
+    bit_to_tail(chunk, desc.index, &lock_impl->tail);
+    return lock;
 }
 
 bool lazyfree_read_lock_check(struct lazyfree_cache* cache, lazyfree_rlock_t lock) {
+    rlock_impl_t *rlock_impl = (rlock_impl_t*) &lock;
     assert(cache->wlock_chunk == EMPTY_DESC.chunk);
-    if (lock._chunk == EMPTY_DESC.chunk) {
+    if (rlock_impl->_chunk == EMPTY_DESC.chunk) {
         return false;
     }
-    return rlock_check_head(cache, lock) && rlock_check_key(cache, lock);
+    return rlock_check_tail(cache, *rlock_impl) && rlock_check_key(cache, *rlock_impl);
 }
 
 void lazyfree_read_unlock(struct lazyfree_cache* cache, lazyfree_rlock_t lock, bool drop) {
@@ -325,17 +344,19 @@ void lazyfree_read_unlock(struct lazyfree_cache* cache, lazyfree_rlock_t lock, b
     if (!drop) {
         return;
     }
-    if (lock._chunk == EMPTY_DESC.chunk) {
+   
+    rlock_impl_t *lock_impl = (rlock_impl_t*) &lock;
+    if (lock_impl->_chunk == EMPTY_DESC.chunk) {
         return;
     }
-    if (!rlock_check_key(cache, lock)) {
+    if (!rlock_check_key(cache, *lock_impl)) {
         return;
     }
     
-    struct chunk* chunk = &cache->chunks[lock._chunk];
+    struct chunk* chunk = &cache->chunks[lock_impl->_chunk];
     struct entry_descriptor desc = {
-        .chunk = lock._chunk,
-        .index = rlock_to_index(chunk, lock),
+        .chunk = lock_impl->_chunk,
+        .index = rlock_to_index(chunk, *lock_impl),
     };
     cache_drop(cache, desc);
 }
@@ -469,41 +490,44 @@ void* lazyfree_write_alloc(lazyfree_cache_t cache, lazyfree_key_t key) {
 
 
 void* lazyfree_write_upgrade(lazyfree_cache_t cache, lazyfree_rlock_t* lock) {
-    if (cache->verbose || lock->_key == DEBUG_KEY) {
-        printf("DEBUG: Upgrading lock for key %lu\n", lock->_key);
+    rlock_impl_t *lock_impl = (rlock_impl_t*) lock;
+    if (cache->verbose || lock_impl->_key == DEBUG_KEY) {
+        printf("DEBUG: Upgrading lock for key %lu\n", lock_impl->_key);
     }
     assert(cache->wlock_chunk == EMPTY_DESC.chunk);
 
-    if (lock->tail == NULL) {
+    if (LAZYFREE_LOCK_IS_BLANK(*lock)) {
         // This is an empty entry
-        return lazyfree_write_alloc(cache, lock->_key);
+        return lazyfree_write_alloc(cache, lock_impl->_key);
     }
 
-    if (!rlock_check_key(cache, *lock)) {
+    if (!rlock_check_key(cache, *lock_impl)) {
         // This is now some other key
-        return lazyfree_write_alloc(cache, lock->_key);
+        lock_impl->head = NULL;
+        return lazyfree_write_alloc(cache, lock_impl->_key);
     }
 
-    // Use second byte to lock the page
-    uint8_t byte1 = lock->tail[0];
-    lock->tail[0] = 1;
-    if (!rlock_check_head(cache, *lock)) {
-        lock->tail[0] = 0;
+    // Use first byte to lock the page
+    uint8_t byte0 = lock_impl->head[0];
+    lock_impl->head[0] = 1;
+    if (!rlock_check_tail(cache, *lock_impl)) {
+        lock_impl->head[0] = 0;
+        lock_impl->head = NULL;
         printf("DEBUG: Page updated during upgrade\n");
-        return lazyfree_write_alloc(cache, lock->_key);
+        return lazyfree_write_alloc(cache, lock_impl->_key);
     }
-    lock->tail[0] = byte1;
+    lock_impl->head[0] = byte0;
     
     // Set wlock
-    cache->wlock_chunk = lock->_chunk;
-    cache->wlock_index = lock->_index;
-    cache->wlock_key = lock->_key;
+    cache->wlock_chunk = lock_impl->_chunk;
+    cache->wlock_index = lock_impl->_index;
+    cache->wlock_key   = lock_impl->_key;
     // Already in hashmap and keys
     
-    struct chunk* chunk = &cache->chunks[lock->_chunk];
-    struct discardable_entry* entry = &chunk->entries[lock->_index];
+    struct chunk* chunk = &cache->chunks[lock_impl->_chunk];
+    struct discardable_entry* entry = &chunk->entries[lock_impl->_index];
 
-    bit_to_head(chunk, lock->_index, &entry->head);
+    bit_to_tail(chunk, lock_impl->_index, &entry->tail);
     return (uint8_t*) entry;
 }
 
@@ -528,7 +552,7 @@ void lazyfree_write_unlock(lazyfree_cache_t cache, bool drop) {
     // Move bit0 from head to bit0
     struct chunk* chunk = &cache->chunks[desc.chunk];
     struct discardable_entry* entry = &chunk->entries[desc.index];
-    bit_from_head(chunk, desc.index, &entry->head);  
+    bit_from_tail(chunk, desc.index, &entry->tail);  
 
     // if (cache->verbose || cache->wlock_key == DEBUG_KEY) {
     //     printf("DEBUG: Write unlock key %lu, chunk %d, index %d\n", cache->wlock_key, desc.chunk, desc.index);
@@ -553,93 +577,44 @@ struct lazyfree_stats lazyfree_fetch_stats(lazyfree_cache_t cache, bool verbose)
 }
 
 
-
-// == Memory functions  ==
-
-void lazyfree_madv_free(void *memory, size_t size) {
-    int ret;
-
-    ret = madvise(memory, size, MADV_FREE);
-    assert(ret == 0);
-}
-
-void lazyfree_madv_cold(void *memory, size_t size) {
-    int ret = madvise(memory, size,  MADV_COLD);
-    assert(ret == 0);
-}
-
-void *lazyfree_mmap_anon(size_t size) {
-    void *addr = mmap(NULL, size, 
-                PROT_READ | PROT_WRITE, 
-                MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE,
-                -1, 0);
-    if (addr == MAP_FAILED) {
-        perror("mmap");
-        exit(1);
-    }
-
-    // int ret = madvise(addr, size, MADV_NOHUGEPAGE | MADV_WILLNEED);
-    // assert(ret == 0);
-    // printf("Anon mmap %zu Mb at %p\n", size / M, addr);
-    return addr;
-}
-
-void *lazyfree_mmap_file(size_t size) {
-    char filename[PATH_MAX];
-    mkdir("./tmp", 0755);
-    snprintf(filename, PATH_MAX, "./tmp/cache-%ld", random_next());
-
-
-    int fd = open(filename, O_RDWR | O_CREAT, 0644);
-    if (fd == -1) {
-        perror("open");
-        exit(1);
-    }
-
-    if (ftruncate(fd, size) == -1) {
-        perror("ftruncate");
-        exit(1);
-    }
-
-    void *addr = mmap(NULL, size, 
-        PROT_READ | PROT_WRITE, 
-        MAP_SHARED | MAP_NORESERVE, 
-        fd, 0);
-    if (addr == MAP_FAILED) {
-        perror("mmap");
-        exit(1);
-    }
-    close(fd);
-    lazyfree_madv_cold(addr, size);
-    return addr;
-}
-
-
 // == Tests
 
 void lazyfree_cache_tests() {
-    uint64_t value = random_next();
-    
+    volatile uint64_t value = random_next();    
     lazyfree_cache_t cache = lazyfree_cache_new(32*NUMBER_OF_CHUNKS*PAGE_SIZE);
+    uint64_t* ptr = NULL;
+    lazyfree_rlock_t lock = EMPTY_LOCK;
+    uint64_t result;
     
     
-    uint64_t* ptr = lazyfree_write_alloc(cache, 1);
+    // HEAD WRITE
+    ptr = lazyfree_write_alloc(cache, 1);
     *ptr = value;
-    
     lazyfree_write_unlock(cache, false);
 
-    lazyfree_rlock_t lock = lazyfree_read_lock(cache, 1);
+    lock = lazyfree_read_lock(cache, 1);
+    lazyfree_read(&result, lock, 0, sizeof(uint64_t));
+    assert(result == value);
     if (!lazyfree_read_lock_check(cache, lock)) {
         printf("Lock is not valid\n");
         exit(1);
     }
-    uint64_t* ptr2 = lazyfree_write_upgrade(cache, &lock);
-    if (*ptr2 != value) {
-        printf("Value %lu != expected %lu\n", *ptr2, value);
-        exit(1);
-    }
+    lazyfree_read_unlock(cache, lock, false);
+    // END HEAD WRITE
+
+
+    // TAIL WRITE
+    lock = lazyfree_read_lock(cache, 1);
+    lazyfree_write_upgrade(cache, &lock);
+    ptr[PAGE_SIZE/sizeof(uint64_t) - 1] = value + 1;
     lazyfree_write_unlock(cache, false);
 
+    lock = lazyfree_read_lock(cache, 1);
+    assert(!LAZYFREE_LOCK_IS_BLANK(lock));
+    lazyfree_read(&result, lock, PAGE_SIZE-sizeof(uint64_t), sizeof(uint64_t));
+    assert(result == value + 1);
+    lazyfree_read_unlock(cache, lock, false);
+    // END TAIL WRITE
 
     lazyfree_cache_free(cache);
 }

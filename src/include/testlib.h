@@ -12,6 +12,7 @@
 #include "fallthrough_cache.h"
 #include "random.h"
 #include "refill.h"
+#include "util.h"
 
 
 struct testlib_keyset {
@@ -167,22 +168,28 @@ struct hot_cold_report run_hot_cold(struct fallthrough_cache* cache, size_t set_
     testlib_init_keyset(&hot_set, hot_size/PAGE_SIZE);
     struct testlib_keyset cold_set;
     testlib_init_keyset(&cold_set, cold_size/PAGE_SIZE);
+    struct testlib_keyset junk_set;
+    testlib_init_keyset(&junk_set, hot_size/PAGE_SIZE);
 
     struct hot_cold_report report;
 
-    int factor = 4;
-    int attempts = 2;
+    int factor = 3;
+    int attempts = 3;
+    int total = 2*(factor+1)*attempts;
     printf("Starting warmup %d times, hot %dx likely\n", attempts, factor);
-    for (int i = 0; i < attempts; ++i) {
-        size_t rnd = random_next() % (factor + 1);
-        if (rnd == 0) {
+    for (int i = 0; i < total; ++i) {
+        bool is_cold = i % (factor + 1) == 0;
+        if (is_cold) {
+            printf("[%d/%d] Warmup cold...\n", i+1, total);
             testlib_get_all(cache, &cold_set);
             testlib_set_random_order(&cold_set);
         } else {
+            printf("[%d/%d] Warmup hot...\n", i+1, total);
             testlib_get_all(cache, &hot_set);
             testlib_set_random_order(&hot_set);
         }
     }
+    testlib_get_all(cache, &junk_set);
 
     report.hot_before_reclaim = testlib_measure_set(cache, &hot_set);
     report.cold_before_reclaim = testlib_measure_set(cache, &cold_set);
@@ -216,8 +223,10 @@ struct hot_cold_report run_hot_cold(struct fallthrough_cache* cache, size_t set_
 
     testlib_drop_all(cache, &hot_set);
     testlib_drop_all(cache, &cold_set);
+    testlib_drop_all(cache, &junk_set);
     testlib_free_keyset(&hot_set);
     testlib_free_keyset(&cold_set);
+    testlib_free_keyset(&junk_set);
 
     return report;
 }
