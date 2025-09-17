@@ -26,7 +26,7 @@
 static_assert(NUMBER_OF_CHUNKS < (1 << 7), "Too many chunks");
 
 struct discardable_entry {
-    uint8_t head[PAGE_SIZE-1];
+    volatile uint8_t head[PAGE_SIZE-1];
     uint8_t tail;
 };
 static_assert(sizeof(struct discardable_entry) == PAGE_SIZE, "Discardable entry size is not equal to page size");
@@ -39,7 +39,7 @@ struct entry_descriptor {
 static_assert(sizeof(struct entry_descriptor) == 8, "entry_descriptor size is not 8 bytes");
 
 typedef struct {
-    uint8_t *head;     // [0:PAGE_SIZE-1]
+    volatile uint8_t *head;     // [0:PAGE_SIZE-1]
     uint8_t tail;      // last byte of the page
 
     int8_t _chunk;

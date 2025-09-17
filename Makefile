@@ -29,6 +29,8 @@ build build/cache build/util:
 clean:
 	rm -rf build
 	rm -rf ./tmp
+	test -f perf.data && sudo rm -rf perf.data		   || true
+	test -f perf.data.old && sudo rm -rf perf.data.old || true
 
 
 perf: build/benchmark

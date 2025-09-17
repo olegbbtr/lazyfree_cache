@@ -18,7 +18,6 @@ struct lazyfree_stats {
     size_t free_pages;
 };
 
-
 // ========= Generic cache ============
 
 // PAGE_SIZE must be equal to kernel page size.
@@ -26,8 +25,8 @@ struct lazyfree_stats {
 
 // Use this to read from the page.
 typedef struct {
-    const uint8_t *head;     // [0:PAGE_SIZE-1]
-    uint8_t tail;            // last byte of the page
+    const volatile uint8_t *head;     // [0:PAGE_SIZE-1]
+    uint8_t tail;                     // last byte of the page
 
     uint8_t __padding[15];
 } lazyfree_rlock_t;  
@@ -44,7 +43,9 @@ static inline bool lazyfree_read(void *dest, lazyfree_rlock_t lock, size_t offse
     if (LAZYFREE_LOCK_IS_BLANK(lock)) {
         return false;
     }
-    memcpy(dest, lock.head + offset, size);
+    for (size_t i = 0; i < size && offset + i < PAGE_SIZE; ++i) {
+        ((uint8_t*)dest)[i] = lock.head[offset + i];
+    }
     if (offset + size == PAGE_SIZE) {
         ((uint8_t*)dest)[size-1] = lock.tail;
     }
