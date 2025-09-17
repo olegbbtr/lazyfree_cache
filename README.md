@@ -81,44 +81,47 @@ void lazyfree_write_unlock(lazyfree_cache_t cache, bool drop);
 ### Fallthrough API
 
 [fallthrough_cache.h](include/fallthrough_cache.h) provides higher-level API on top of generic implemmentation.
-On miss, this cache will refill entry from ground truth.
+On miss, this cache will refill entry from the ground truth.
 
 ```c
-// Init Fallthrough Cache
-// Takes generic lazyfree_impl and refill callback.
-void ft_cache_init(ft_cache_t *cache, struct lazyfree_impl impl, 
-                   size_t capacity, size_t entry_size,
-                   ft_refill_t refill_cb, void *refill_opaque);
+typedef struct fallthrough_cache ft_cache_t; 
 
-// Destroy Fallthrough Cache
+// Takes a generic implementation and a refill callback.
+void ft_cache_init(ft_cache_t *cache, struct lazyfree_impl impl, 
+                   ft_refill_t refill_cb, void *refill_opaque,
+                   size_t capacity, size_t entry_size);
+
 void ft_cache_destroy(ft_cache_t *cache);
 
-// Get value from cache, or repopulate
+// Get value from the cache, or refill it.
 void ft_cache_get(ft_cache_t *cache, 
                   lazyfree_key_t key, 
                   uint8_t *value);
 
-// Returns true if found, false if not found.
+// Drop the key from the cache. Returns true if existed.
 bool ft_cache_drop(ft_cache_t *cache, lazyfree_key_t key);
+
+// Print debug info and remember verbosity.
+void ft_cache_debug(ft_cache_t *cache, bool verbose);
 ```
 
 ### Other headers
 
-- `cache.h` - generic cache interface.
-- `stub_cache.h` - stub cache implementation.
+- [cache.h](include/cache.h) - generic cache interface.
+- [stub_cache.h](include/stub_cache.h) - stub cache implementation.
   - It never stores any pages, and claims all read lock attempts are unsuccessful.
-- `hashmap.h` - taken from [hashmap.h](https://github.com/sheredom/hashmap.h).
+- [hashmap.h](include/hashmap.h) - taken from [hashmap.h](https://github.com/sheredom/hashmap.h).
   - Previously had [stb_ds.h](https://nothings.org/stb_ds/), but it had some issues with deletion.
   - No other public domain hashmaps could be found :(
   - Open Addressing Hashmap can probably be implemented inside the cache, for even better performance.
-- `testlib.h` - includes tools to build cache tests and benchmarks.
+- [testlib.h](include/testlib.h) - includes tools to build cache tests and benchmarks.
 
 ## Implementation details
 
 The cache consists of a fixed number of chunks (e.g. 32), chunks are arranged in a circular order.
 There is one persistent anonymous allocation per chunk.
 New page allocations happen only to the current chunk.
-After the current chunk has no more free pages,  `madvise(..., MADV_FREE);` is called, and the next chunk becomes current.
+After the current chunk has no more free pages, `madvise(..., MADV_FREE);` is called, and the next chunk becomes current.
 That memory can now be reclaimed by kernel at any moment.
 
 Fortunately, this happens at page granularity, and we can detect if page was reset.

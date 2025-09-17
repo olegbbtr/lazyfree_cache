@@ -9,8 +9,8 @@
 
 
 void ft_cache_init(struct fallthrough_cache *cache, struct lazyfree_impl impl, 
-                   size_t num_entries, size_t entry_size,
-                   ft_refill_t refill_cb, void *refill_opaque) {
+                   ft_refill_t refill_cb, void *refill_opaque,
+                   size_t num_entries, size_t entry_size) {
     assert(entry_size <= PAGE_SIZE);
     memset(cache, 0, sizeof(*cache));
     cache->impl = impl;
