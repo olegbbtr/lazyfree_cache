@@ -12,6 +12,9 @@
 typedef uint8_t* bitset_t;
 
 static bitset_t bitset_new(size_t size) {
+    if (size % 8 != 0) {
+        size += 8;
+    }
     return malloc(size/8);
 }
 

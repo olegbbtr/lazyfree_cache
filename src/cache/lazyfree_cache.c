@@ -51,9 +51,8 @@ static_assert(sizeof(lazyfree_rlock_t) == 24, "lazyfree_rlock_t size is not 24 b
 static_assert(offsetof(lazyfree_rlock_t, head) == offsetof(rlock_impl_t, head), "lazyfree_rlock_t and rlock_impl_t have different head offsets");
 static_assert(offsetof(lazyfree_rlock_t, tail) == offsetof(rlock_impl_t, tail), "lazyfree_rlock_t and rlock_impl_t have different tail offsets");
 
+static struct entry_descriptor  EMPTY_DESC = { .chunk = -1 };
 
-static struct entry_descriptor EMPTY_DESC = { .chunk = -1 };
-static lazyfree_rlock_t EMPTY_LOCK = { .head = NULL, .tail = 0 };
 
 struct chunk {
     struct discardable_entry* entries; // anonymous mmap size=CHUNK_SIZE
@@ -312,17 +311,16 @@ lazyfree_rlock_t lazyfree_read_lock(lazyfree_cache_t cache,
 
     lock_impl->_index = desc.index;
     lock_impl->_chunk = desc.chunk;
-    lock_impl->head = entry->head;
     
     if (entry->tail == 0) {
         if (cache->verbose || key == DEBUG_KEY) {
             printf("Key %lu was evicted by kernel\n", key);
         }
 
-        lock_impl->head = NULL;
         return lock;
     }
 
+    lock_impl->head = entry->head;
     lock_impl->tail = entry->tail;
     bit_to_tail(chunk, desc.index, &lock_impl->tail);
     return lock;
@@ -339,6 +337,11 @@ bool lazyfree_read_lock_check(struct lazyfree_cache* cache, lazyfree_rlock_t loc
 
 void lazyfree_read_unlock(struct lazyfree_cache* cache, lazyfree_rlock_t lock, bool drop) {
     assert(cache->wlock_chunk == EMPTY_DESC.chunk);
+
+    if (lock.head == EMPTY_PAGE) {
+        // No real page
+        return;
+    }
 
     // Do we need to drop?
     if (!drop) {
@@ -496,7 +499,7 @@ void* lazyfree_write_upgrade(lazyfree_cache_t cache, lazyfree_rlock_t* lock) {
     }
     assert(cache->wlock_chunk == EMPTY_DESC.chunk);
 
-    if (LAZYFREE_LOCK_IS_BLANK(*lock)) {
+    if (lock->head == EMPTY_PAGE) {
         // This is an empty entry
         return lazyfree_write_alloc(cache, lock_impl->_key);
     }
@@ -594,6 +597,7 @@ void lazyfree_cache_tests() {
 
     lock = lazyfree_read_lock(cache, 1);
     lazyfree_read(&result, lock, 0, sizeof(uint64_t));
+    assert(LAZYFREE_LOCK_CHECK(lock));
     assert(result == value);
     if (!lazyfree_read_lock_check(cache, lock)) {
         printf("Lock is not valid\n");
@@ -610,8 +614,8 @@ void lazyfree_cache_tests() {
     lazyfree_write_unlock(cache, false);
 
     lock = lazyfree_read_lock(cache, 1);
-    assert(!LAZYFREE_LOCK_IS_BLANK(lock));
     lazyfree_read(&result, lock, PAGE_SIZE-sizeof(uint64_t), sizeof(uint64_t));
+    assert(LAZYFREE_LOCK_CHECK(lock));
     assert(result == value + 1);
     lazyfree_read_unlock(cache, lock, false);
     // END TAIL WRITE

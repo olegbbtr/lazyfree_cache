@@ -2,12 +2,18 @@
 #define UTIL_H
 
 #include <stddef.h>
+#include <stdint.h>
+
+#include "cache.h"
 
 #define K 1024ul
 #define M (K*K)
 #define G (K*M)
 
 #define UNUSED(x) (void)(x)
+
+static uint8_t                  EMPTY_PAGE[PAGE_SIZE];
+static lazyfree_rlock_t         EMPTY_LOCK = { .head = EMPTY_PAGE, .tail = 0 };
 
 
 // == Memory allocation ==

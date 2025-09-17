@@ -23,35 +23,21 @@ struct lazyfree_stats {
 // PAGE_SIZE must be equal to kernel page size.
 #define PAGE_SIZE 4096
 
-// Use this to read from the page.
+// lazyfree_rlock_t is used to read from the page.
 typedef struct {
-    const volatile uint8_t *head;     // [0:PAGE_SIZE-1]
-    uint8_t tail;                     // last byte of the page
+    const volatile uint8_t *head; // [0:PAGE_SIZE-1]
+    uint8_t tail;                 // last byte of the page
 
-    uint8_t __padding[15];
+    uint8_t __padding[15];        // Used internally
 } lazyfree_rlock_t;  
 
-// Use this to check if the entry is present in the cache.
-#define LAZYFREE_LOCK_IS_BLANK(lock) ((lock).head == NULL)
+// LAZYFREE_LOCK_CHECK returns if lock is still valid.
+// Must be called after reading the payload, to verify the page has not been dropped.
+#define LAZYFREE_LOCK_CHECK(lock) ((lock).head[PAGE_SIZE-1] > 0)
 
-// Use this to check if the lock is still valid.
-#define LAZYFREE_LOCK_IS_VALID(lock) ((lock).head[PAGE_SIZE-1] > 0)
-
-// Helper to memcpy with offset
-// Returns true if the lock is still valid.
-static inline bool lazyfree_read(void *dest, lazyfree_rlock_t lock, size_t offset, size_t size) {
-    if (LAZYFREE_LOCK_IS_BLANK(lock)) {
-        return false;
-    }
-    for (size_t i = 0; i < size && offset + i < PAGE_SIZE; ++i) {
-        ((uint8_t*)dest)[i] = lock.head[offset + i];
-    }
-    if (offset + size == PAGE_SIZE) {
-        ((uint8_t*)dest)[size-1] = lock.tail;
-    }
-    return LAZYFREE_LOCK_IS_VALID(lock);
-}
-
+// lazyfree_read is a helper to safely read from the lock.
+// Returns true if successful.
+static inline bool lazyfree_read(void *dest, lazyfree_rlock_t lock, size_t offset, size_t size);
 
 struct lazyfree_impl {
     lazyfree_cache_t (*new)(size_t cache_size, lazyfree_mmap_impl_t mmap_impl, lazyfree_madv_impl_t madv_impl);
@@ -74,9 +60,26 @@ struct lazyfree_impl {
     struct lazyfree_stats (*stats)(lazyfree_cache_t cache, bool verbose);
 };
 
+// Implementations
 struct lazyfree_impl lazyfree_impl();
 struct lazyfree_impl lazyfree_anon_impl();
 struct lazyfree_impl lazyfree_disk_impl();
 struct lazyfree_impl lazyfree_stub_impl();
+
+// Inline implementation for better performance.
+static inline bool lazyfree_read(void *dest, lazyfree_rlock_t lock, size_t offset, size_t size){
+    if (!LAZYFREE_LOCK_CHECK(lock)) {
+        return false;
+    }
+    
+    for (size_t i = 0; i < size && offset + i < PAGE_SIZE; ++i) {
+        ((uint8_t*)dest)[i] = lock.head[offset + i];
+    }
+
+    if (offset + size == PAGE_SIZE) {
+        ((uint8_t*)dest)[size-1] = lock.tail;
+    }
+    return LAZYFREE_LOCK_CHECK(lock);
+}
 
 #endif

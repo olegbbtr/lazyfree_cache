@@ -7,7 +7,6 @@
 #include "util.h"
 
 
-uint8_t EMPTY_PAGE[PAGE_SIZE];
 
 lazyfree_cache_t stub_cache_new(size_t cache_size, lazyfree_mmap_impl_t mmap_impl, lazyfree_madv_impl_t madv_impl) {
     UNUSED(cache_size);
@@ -25,7 +24,7 @@ void stub_cache_free(lazyfree_cache_t lfcache) {
 lazyfree_rlock_t stub_cache_read_lock(lazyfree_cache_t cache, lazyfree_key_t key) {
     UNUSED(cache);
     UNUSED(key);
-    return (lazyfree_rlock_t){ .head = NULL, .tail = 0 };
+    return EMPTY_LOCK;
 }
 
 

@@ -23,67 +23,49 @@ to reconstruct the page data from the ground truth.
 [lazyfree_cache.h](include/lazyfree_cache.h) provides default LazyFree API.
 
 ```c
-// == Core API ==
-
 // PAGE_SIZE must be equal to kernel page size.
 #define PAGE_SIZE 4096
 
 typedef struct lazyfree_cache* lazyfree_cache_t;
-
-// Create a new cache.
-// Return NULL on allocation failures.
 lazyfree_cache_t lazyfree_cache_new(size_t capacity_bytes);
-
-// Free the cache.
 void lazyfree_cache_free(lazyfree_cache_t cache);
 
-// Key type.
+// Key type
 typedef uint64_t lazyfree_key_t;
 
-
-// == Optimistic Read Lock API ==
-// This might look complicated, but it is necessary to support
-// zero-copy reads.
+// ================================ Read API ================================
+// This is elaborate API, but it is necessary to support zero-copy reads.
 
 typedef struct {
-    /* ... */
-    uint8_t head;       // First byte of the page
-    uint8_t* tail;      // [1:PAGE_SIZE]
+    const volatile uint8_t *head; // [0:PAGE_SIZE-1]
+    uint8_t tail;                 // last byte of the page
 } lazyfree_rlock_t;  
 
-// This macro can be used to check if the call resulted in an allocation of a new page.
-#define LAZYFREE_RLOCK_IS_BLANK(lock) (lock.tail == NULL)
+// LAZYFREE_LOCK_CHECK returns if lock is still valid.
+// Must be called after reading the payload, to verify the page has not been dropped.
+#define LAZYFREE_LOCK_CHECK(lock) ((lock).head[PAGE_SIZE-1] > 0)
+
+// lazyfree_read is a helper to safely read from the lock.
+// Returns true if successful.
+static inline bool lazyfree_read(void *dest, lazyfree_rlock_t lock, size_t offset, size_t size);
 
 // Take an optimistic read lock.
-// Returns the handle with two fields:
-//    head - page[0]
-//    tail - ptr to page[1:PAGE_SIZE] if existed, NULL if blank
-// The lock can be upgraded to a write lock.
 lazyfree_rlock_t lazyfree_read_lock(lazyfree_cache_t cache, lazyfree_key_t key);
 
-// Check the lock is still valid.
-// Must be called after reading the payload, to verify the validity of the read.
-bool lazyfree_read_lock_check(lazyfree_cache_t cache, lazyfree_rlock_t lock);
-
-// Unlock the read lock.
 // If drop is true, drops the page.
 void lazyfree_read_unlock(lazyfree_cache_t cache, lazyfree_rlock_t lock, bool drop);
 
-
-// == Write Lock API ==
+// ================================ Write API ================================
 // Only one page can be locked for write at the time.
 // There are two ways to get a write lock:
 
-// Allocates a new page in the cache.
-// Must not be called for existing keys, instead lazyfree_write_upgrade must be used.
-// Returns ptr to page[0:PAGE_SIZE]
+// Can be called only for new keys.
 void* lazyfree_write_alloc(lazyfree_cache_t cache, lazyfree_key_t key);
 
 // Upgrade the read lock into write lock.
-// Returns ptr to page[0:PAGE_SIZE]
+// LAZYFREE_LOCK_CHECK(lock) can be used to verify if the page still has the same data.
 void* lazyfree_write_upgrade(lazyfree_cache_t cache, lazyfree_rlock_t* lock);
 
-// Unlocks the write lock.
 // If drop is true, drops the page.
 void lazyfree_write_unlock(lazyfree_cache_t cache, bool drop);
 ```
@@ -252,7 +234,7 @@ Using LazyCache might be preferable in order to:
    - If the two above are combined, and the eviction policy is similar to kernel's,
      it might be possible to ever reuse only evicted memory.
      Thus, all evictions would be guided by memory pressure.
-2. Already has RWLock semantics, can have multiple writers if writing to different chunks.
+2. Already can be used under RWLock, multiple writers can be supported.
 3. Fallthrough cache should be able to pack multiple entries into a single page. They would be evicted together.
 4. Should have measurements with different reclaim sizes.
 

@@ -28,14 +28,14 @@ void ft_cache_destroy(struct fallthrough_cache* cache) {
 
 void ft_cache_get(ft_cache_t* cache, uint64_t key, uint8_t *value) {
     lazyfree_rlock_t lock = cache->impl.read_lock(cache->cache, key);
-    if (!LAZYFREE_LOCK_IS_BLANK(lock)) {
+    assert(lock.head != NULL);
+    if (LAZYFREE_LOCK_CHECK(lock)) {
         // Found
-
+        
         lazyfree_read(value, lock, PAGE_SIZE-cache->entry_size, cache->entry_size);
-
-        if (LAZYFREE_LOCK_IS_VALID(lock)) {
+        
+        if (LAZYFREE_LOCK_CHECK(lock)) {
             // Check successful
-            lazyfree_read(value, lock, PAGE_SIZE-cache->entry_size, cache->entry_size);
             cache->impl.read_unlock(cache->cache, lock, false);
             return;
         }
@@ -57,7 +57,7 @@ void ft_cache_get(ft_cache_t* cache, uint64_t key, uint8_t *value) {
 bool ft_cache_drop(ft_cache_t* cache, 
                             uint64_t key) {
     lazyfree_rlock_t lock = cache->impl.read_lock(cache->cache, key);
-    if (!LAZYFREE_LOCK_IS_BLANK(lock)) {
+    if (LAZYFREE_LOCK_CHECK(lock)) {
         cache->impl.read_unlock(cache->cache, lock, true);
         return true;
     }

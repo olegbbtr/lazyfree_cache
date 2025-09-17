@@ -2,7 +2,7 @@
 
 set -e
 
-make
+make build/test
 
 ./build/test lazyfree 2
 ./build/test lazyfree_full 2 
