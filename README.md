@@ -237,6 +237,15 @@ Using LazyCache might be preferable in order to:
 2. Already can be used under RWLock, multiple writers can be supported.
 3. Fallthrough cache should be able to pack multiple entries into a single page. They would be evicted together.
 4. Should have measurements with different reclaim sizes.
+5. Right now, disposable allocations are made with `mmap(..., MAP_NORESERVE)`.
+   Perhaps it would be possible to mix `MADV_FREE` with using swap to get even better flexibility
 
 Other than that, the library is ready to be integrated into other projects,
 subject to more correctness verification and performance measurements.
+
+## License
+
+This software is available under 2 licenses -- choose whichever you prefer:
+
+- The Unlicense (see [LICENSE](LICENSE))
+- MIT License (see [LICENSE2](LICENSE2))
