@@ -23,6 +23,8 @@ to reconstruct the page data from the ground truth.
 [lazyfree_cache.h](include/lazyfree_cache.h) provides default LazyFree API.
 
 ```c
+// ================================ Lifecycle API ================================
+
 // PAGE_SIZE must be equal to kernel page size.
 #define PAGE_SIZE 4096
 
@@ -32,6 +34,8 @@ void lazyfree_cache_free(lazyfree_cache_t cache);
 
 // Key type
 typedef uint64_t lazyfree_key_t;
+
+
 
 // ================================ Read API ================================
 // This is elaborate API, but it is necessary to support zero-copy reads.
@@ -54,6 +58,8 @@ lazyfree_rlock_t lazyfree_read_lock(lazyfree_cache_t cache, lazyfree_key_t key);
 
 // If drop is true, drops the page.
 void lazyfree_read_unlock(lazyfree_cache_t cache, lazyfree_rlock_t lock, bool drop);
+
+
 
 // ================================ Write API ================================
 // Only one page can be locked for write at the time.
