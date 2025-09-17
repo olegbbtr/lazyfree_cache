@@ -41,7 +41,7 @@ void testlib_set_random_order(struct testlib_keyset *keyset) {
 
 void testlib_init_keyset(struct testlib_keyset *keyset, size_t cnt) {
     memset(keyset, 0, sizeof(*keyset));
-    keyset->seed = random_next();
+    keyset->seed = random_next() + 999;
     keyset->cnt = cnt;
     keyset->permutation = malloc(cnt * sizeof(size_t));
   
@@ -52,6 +52,21 @@ void testlib_free_keyset(struct testlib_keyset *keyset) {
     free(keyset->permutation);
 }
 
+static void testlib_get_one(ft_cache_t *cache, struct testlib_keyset *keyset) {
+    uint64_t key = keyset->seed + keyset->permutation[keyset->pos];
+    uint64_t value;
+    ft_cache_get(cache, key, (uint8_t*) &value);
+    if (value != refill_expected(key)) {
+        printf("Key %lu: Value %lu != expected %lu\n", key, value, refill_expected(key));
+        exit(1);
+    }
+    keyset->pos++;
+    if (keyset->pos == keyset->cnt) {
+        keyset->pos = 0;
+        testlib_set_random_order(keyset);
+    }
+}
+
 
 static bool testlib_verbose = false;
 
@@ -60,15 +75,9 @@ static float testlib_get_all(ft_cache_t *cache,
                                struct testlib_keyset *keyset) {
     refill_ctx.count = 0;
     for (size_t i = 0; i < keyset->cnt; ++i) {
-        uint64_t key = keyset->seed + keyset->permutation[i];
-        uint64_t value;
-        ft_cache_get(cache, key, (uint8_t*) &value);
-
-        if (value != refill_expected(key)) {
-            printf("Key %lu: Value %lu != expected %lu\n", key, value, refill_expected(key));
-            exit(1);
-        }
+        testlib_get_one(cache, keyset);
     }
+    testlib_set_standard_order(keyset);
     float hitrate = ((float) keyset->cnt - (float) refill_ctx.count) / (float) keyset->cnt;
     if (testlib_verbose) {
         printf("size=%zuMb hitrate=%.2f%%\n", keyset->cnt * PAGE_SIZE/M, hitrate * 100);
@@ -105,7 +114,7 @@ void testlib_reclaim(size_t size) {
 
 void testlib_reclaim_many(size_t chunks, size_t chunk_size) {
     printf("Reclaiming %zu Mb\n", chunks*chunk_size/M);
-    uint8_t **mem = malloc(chunks * sizeof(uint8_t*));
+    volatile uint8_t **mem = malloc(chunks * sizeof(uint8_t*));
     for (size_t i = 0; i < chunks; ++i) {
         // usleep(100*1000);
         mem[i] = lazyfree_mmap_anon(chunk_size);
@@ -114,7 +123,7 @@ void testlib_reclaim_many(size_t chunks, size_t chunk_size) {
         }
     }
     for (size_t i = 0; i < chunks; ++i) {
-        munmap(mem[i], chunk_size);
+        munmap((void*) mem[i], chunk_size);
     }
     free(mem);
 }
@@ -122,7 +131,7 @@ void testlib_reclaim_many(size_t chunks, size_t chunk_size) {
 
 struct testlib_report {
     float hitrate;
-    uint64_t latency_ms;
+    double latency_ns;
 };
 
 struct testlib_report testlib_measure_set(struct fallthrough_cache* cache, struct testlib_keyset* keyset) {
@@ -134,7 +143,9 @@ struct testlib_report testlib_measure_set(struct fallthrough_cache* cache, struc
     clock_gettime(CLOCK_MONOTONIC, &start);
     float hitrate = testlib_get_all(cache, keyset);
     clock_gettime(CLOCK_MONOTONIC, &end);
-    report.latency_ms = (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1e6;
+    report.latency_ns = (end.tv_sec - start.tv_sec) * 1e9;
+    report.latency_ns += (end.tv_nsec - start.tv_nsec);
+    report.latency_ns /= keyset->cnt;
     report.hitrate = hitrate;
 
     return report;
@@ -144,7 +155,7 @@ struct testlib_report testlib_measure_set(struct fallthrough_cache* cache, struc
 
 void testlib_print_report(struct testlib_report report, const char* prefix) {
     printf("%s_hitrate=%.2f\n", prefix, report.hitrate);
-    printf("%s_latency=%ldms\n", prefix, report.latency_ms);
+    printf("%s_latency=%.2fns\n", prefix, report.latency_ns);
 }
 
 struct hot_cold_report {
@@ -159,8 +170,9 @@ struct hot_cold_report {
 
 
 struct hot_cold_report run_hot_cold(struct fallthrough_cache* cache, size_t set_size, size_t reclaim_size) {
-    size_t hot_size = 256 * M;
-    size_t cold_size = (set_size - hot_size) - 256 * M;
+    size_t hot_size = 1*G;
+    size_t junk_size = 256 * M;
+    size_t cold_size = (set_size - hot_size) - junk_size;
     if (testlib_verbose) {
         printf("Hot size: %zuMb, cold size: %zuMb\n", hot_size/M, cold_size/M);
     }
@@ -169,27 +181,29 @@ struct hot_cold_report run_hot_cold(struct fallthrough_cache* cache, size_t set_
     struct testlib_keyset cold_set;
     testlib_init_keyset(&cold_set, cold_size/PAGE_SIZE);
     struct testlib_keyset junk_set;
-    testlib_init_keyset(&junk_set, hot_size/PAGE_SIZE);
+    testlib_init_keyset(&junk_set, junk_size/PAGE_SIZE);
 
     struct hot_cold_report report;
 
-    int factor = 3;
-    int attempts = 3;
-    int total = 2*(factor+1)*attempts;
-    printf("Starting warmup %d times, hot %dx likely\n", attempts, factor);
-    for (int i = 0; i < total; ++i) {
-        bool is_cold = i % (factor + 1) == 0;
+    int factor_hot = 3;
+    int passes = 2;
+
+    size_t total = (factor_hot + 1) * passes * (cold_size + hot_size)/PAGE_SIZE;
+    printf("Starting warmup %d passes, hot %dx likely, total %zuK\n", passes, factor_hot, total/K);
+    size_t cnt_hot = 0;
+    size_t cnt_cold = 0;
+    for (size_t i = 0; i < total; ++i) {
+        bool is_cold = random_next() % (factor_hot + 1) == 0;
         if (is_cold) {
-            printf("[%d/%d] Warmup cold...\n", i+1, total);
-            testlib_get_all(cache, &cold_set);
-            testlib_set_random_order(&cold_set);
+            cnt_cold++;
+            testlib_get_one(cache, &cold_set);
         } else {
-            printf("[%d/%d] Warmup hot...\n", i+1, total);
-            testlib_get_all(cache, &hot_set);
-            testlib_set_random_order(&hot_set);
+            cnt_hot++;
+            testlib_get_one(cache, &hot_set);
         }
     }
     testlib_get_all(cache, &junk_set);
+    printf("Warmup finished: hot %zu, cold %zu\n", cnt_hot, cnt_cold);
 
     report.hot_before_reclaim = testlib_measure_set(cache, &hot_set);
     report.cold_before_reclaim = testlib_measure_set(cache, &cold_set);
@@ -203,11 +217,11 @@ struct hot_cold_report run_hot_cold(struct fallthrough_cache* cache, size_t set_
     }
 
     testlib_set_random_order(&hot_set);
-    printf("Measuring hot...\n");
+    printf("Measuring hot (%zuK pages)...\n", hot_set.cnt/K);
     report.hot_after_reclaim = testlib_measure_set(cache, &hot_set);
 
     testlib_set_random_order(&cold_set);
-    printf("Measuring cold...\n");
+    printf("Measuring cold (%zuK pages)...\n", cold_set.cnt/K);
     report.cold_after_reclaim = testlib_measure_set(cache, &cold_set);
 
     // printf("\nStarting final check %d times, core is %dx\n", attempts, factor);
