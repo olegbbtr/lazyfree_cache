@@ -27,16 +27,18 @@ void ft_cache_destroy(struct fallthrough_cache* cache) {
 }
 
 void ft_cache_get(ft_cache_t* cache, uint64_t key, uint8_t *value) {
-    lazyfree_rlock_t lock = cache->impl.read_lock(cache->cache, key);
+    lazyfree_rlock_t lock;
+    lock.key = key;
+    cache->impl.read_lock(cache->cache, &lock);
     assert(lock.head != NULL);
     if (LAZYFREE_LOCK_CHECK(lock)) {
         // Found
         
-        lazyfree_read(value, lock, PAGE_SIZE-cache->entry_size, cache->entry_size);
+        lazyfree_read(&lock, value, PAGE_SIZE-cache->entry_size, cache->entry_size);
         
         if (LAZYFREE_LOCK_CHECK(lock)) {
             // Check successful
-            cache->impl.read_unlock(cache->cache, lock, false);
+            cache->impl.read_unlock(cache->cache, &lock, false);
             return;
         }
 
@@ -48,7 +50,7 @@ void ft_cache_get(ft_cache_t* cache, uint64_t key, uint8_t *value) {
     cache->refill_cb(cache->refill_opaque, key, value);
 
     // Write lock
-    uint8_t *page = cache->impl.write_upgrade(cache->cache, &lock);
+    uint8_t *page = cache->impl.write_lock(cache->cache, &lock);
     memcpy(page+PAGE_SIZE-cache->entry_size, value, cache->entry_size); // Write to the end of the page
     cache->impl.write_unlock(cache->cache, false);
 }
@@ -56,9 +58,11 @@ void ft_cache_get(ft_cache_t* cache, uint64_t key, uint8_t *value) {
 
 bool ft_cache_drop(ft_cache_t* cache, 
                             uint64_t key) {
-    lazyfree_rlock_t lock = cache->impl.read_lock(cache->cache, key);
+    lazyfree_rlock_t lock;
+    lock.key = key;
+    cache->impl.read_lock(cache->cache, &lock);
     if (LAZYFREE_LOCK_CHECK(lock)) {
-        cache->impl.read_unlock(cache->cache, lock, true);
+        cache->impl.read_unlock(cache->cache, &lock, true);
         return true;
     }
     return false;

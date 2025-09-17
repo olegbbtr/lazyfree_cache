@@ -93,8 +93,7 @@ inline struct lazyfree_impl lazyfree_impl() {
         .read_lock = lazyfree_read_lock,
         .read_unlock = lazyfree_read_unlock,
 
-        .write_upgrade = lazyfree_write_upgrade,
-        .write_alloc = lazyfree_write_alloc,
+        .write_lock = lazyfree_write_lock,
         .write_unlock = lazyfree_write_unlock,
 
         .stats = lazyfree_fetch_stats,

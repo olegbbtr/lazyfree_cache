@@ -13,8 +13,6 @@
 #define UNUSED(x) (void)(x)
 
 static uint8_t                  EMPTY_PAGE[PAGE_SIZE];
-static lazyfree_rlock_t         EMPTY_LOCK = { .head = EMPTY_PAGE, .tail = 0 };
-
 
 // == Memory allocation ==
 

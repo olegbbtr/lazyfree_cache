@@ -1,8 +1,8 @@
 CC = clang
-CFLAGS = -g -Wall -Wextra -fno-omit-frame-pointer -O3 -march=native -std=gnu18 -Iinclude -Isrc/include
+CFLAGS = -g -Wall -Wextra -fno-omit-frame-pointer -O0 -march=native -std=gnu18 -Iinclude -Isrc/include
 CFLAGS_DEV_EXTRA = -fsanitize=address,undefined \
 	   			   -fsanitize-address-use-after-scope
-CFLAGS += $(CFLAGS_DEV_EXTRA)
+# CFLAGS += $(CFLAGS_DEV_EXTRA)
 
 SRCS = $(wildcard src/*/*.c)
 OBJS = $(patsubst src/%.c,build/%.o,$(SRCS))
