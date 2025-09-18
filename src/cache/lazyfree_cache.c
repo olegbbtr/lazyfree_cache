@@ -22,8 +22,6 @@
 
 #define DEBUG_KEY -1ul
 
-#define NUMBER_OF_CHUNKS 32
-static_assert(NUMBER_OF_CHUNKS < (1 << 7), "Too many chunks");
 
 struct discardable_entry {
     volatile uint8_t head[PAGE_SIZE-1];
@@ -55,6 +53,8 @@ static struct entry_descriptor  EMPTY_DESC = { .chunk = -1 };
 
 
 struct chunk {
+    madv_impl_t madv_impl;
+    mmap_impl_t mmap_impl;
     struct discardable_entry* entries; // anonymous mmap size=CHUNK_SIZE
     bitset_t bit0;                     // malloc size=PAGES_PER_CHUNK/8 
     uint32_t* free_pages;              // malloc size=PAGES_PER_CHUNK
@@ -64,7 +64,6 @@ struct chunk {
 };
 
 struct lazyfree_cache {
-    lazyfree_madv_impl_t madv_impl;
     size_t cache_capacity;
 
     struct chunk chunks[NUMBER_OF_CHUNKS];
@@ -108,20 +107,38 @@ static hashmap_uint32_t exact_key_hasher(hashmap_uint32_t seed,
     return seed + hash_u64_to_u32((uint64_t) key) + 1;
 }
 
-lazyfree_cache_t lazyfree_cache_new_ex(size_t cache_capacity, 
-                                       lazyfree_mmap_impl_t mmap_impl, 
-                                       lazyfree_madv_impl_t madv_impl) {
+lazyfree_cache_t lazyfree_cache_new_ex(size_t cache_capacity, size_t lazyfree_chunks, size_t anon_chunks, size_t disk_chunks) {
+    if (lazyfree_chunks + anon_chunks + disk_chunks != NUMBER_OF_CHUNKS) {
+        printf("Lazyfree chunks + anon chunks + disk chunks must equal %d\n", NUMBER_OF_CHUNKS);
+        exit(1);
+    }
     struct lazyfree_cache* cache = malloc(sizeof(struct lazyfree_cache));
     memset(cache, 0, sizeof(struct lazyfree_cache));
-    cache->madv_impl = madv_impl;
     cache->cache_capacity = cache_capacity;
     cache->chunk_size = cache_capacity / NUMBER_OF_CHUNKS;
     cache->pages_per_chunk = cache->chunk_size / PAGE_SIZE;
+
+    size_t idx = 0;
+    while (idx < lazyfree_chunks) {
+        cache->chunks[idx].mmap_impl = lazyfree_mmap_anon;
+        cache->chunks[idx].madv_impl = lazyfree_madv_free;
+        idx++;
+    }
+    while (idx < lazyfree_chunks + anon_chunks) {
+        cache->chunks[idx].mmap_impl = lazyfree_mmap_anon;
+        cache->chunks[idx].madv_impl = lazyfree_madv_nop;
+        idx++;
+    }
+    while (idx < lazyfree_chunks + anon_chunks + disk_chunks) {
+        cache->chunks[idx].mmap_impl = lazyfree_mmap_file;
+        cache->chunks[idx].madv_impl = lazyfree_madv_nop;
+        idx++;
+    }
     
 
     // Allocate all chunks on start
-    for (size_t i = 0; i < NUMBER_OF_CHUNKS; ++i) {
-        void *entries = mmap_impl(cache->chunk_size);
+    for (size_t i = 0; i < NUMBER_OF_CHUNKS; i++) {
+        void *entries = cache->chunks[i].mmap_impl(cache->chunk_size);
         assert(entries != MAP_FAILED);
 
         cache->chunks[i].entries = entries;
@@ -147,6 +164,10 @@ lazyfree_cache_t lazyfree_cache_new_ex(size_t cache_capacity,
     cache->wlock_chunk = EMPTY_DESC.chunk;
     
     return cache;
+}
+
+lazyfree_cache_t lazyfree_cache_new(size_t cache_capacity) {
+    return lazyfree_cache_new_ex(cache_capacity, NUMBER_OF_CHUNKS, 0, 0);
 }
 
 void lazyfree_cache_free(struct lazyfree_cache* cache) {
@@ -381,9 +402,9 @@ static void drop_next_chunk(struct lazyfree_cache* cache) {
 }
 
 static void advance_chunk(struct lazyfree_cache* cache) {
-    if (cache->madv_impl != NULL) {
-        cache->madv_impl(cache->chunks[cache->current_chunk_idx].entries, cache->chunk_size);
-    }
+    struct chunk* chunk = &cache->chunks[cache->current_chunk_idx];
+    chunk->madv_impl(chunk->entries, cache->chunk_size);
+    
     cache->current_chunk_idx = (cache->current_chunk_idx + 1) % NUMBER_OF_CHUNKS;
 } 
 
@@ -526,11 +547,6 @@ void lazyfree_write_unlock(lazyfree_cache_t cache, bool drop) {
 }
 
 
-// == Public functions ==
-
-lazyfree_cache_t lazyfree_cache_new(size_t cache_capacity) {
-    return lazyfree_cache_new_ex(cache_capacity, lazyfree_mmap_anon, lazyfree_madv_free);
-}
 
 struct lazyfree_stats lazyfree_fetch_stats(lazyfree_cache_t cache, bool verbose) {
     struct lazyfree_cache* lazyfree_cache = (struct lazyfree_cache*) cache;

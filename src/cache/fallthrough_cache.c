@@ -18,7 +18,7 @@ void ft_cache_init(struct fallthrough_cache *cache, struct lazyfree_impl impl,
     cache->refill_cb = refill_cb;
     cache->refill_opaque = refill_opaque;
 
-    cache->cache = impl.new(num_entries*PAGE_SIZE, impl.mmap_impl, impl.madv_impl);
+    cache->cache = impl.new(num_entries*PAGE_SIZE, impl.lazyfree_chunks, impl.anon_chunks, impl.disk_chunks);
     assert(cache->cache != NULL);
 }
 

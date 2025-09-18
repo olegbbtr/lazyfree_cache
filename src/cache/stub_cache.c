@@ -8,10 +8,11 @@
 
 
 
-lazyfree_cache_t stub_cache_new(size_t cache_size, lazyfree_mmap_impl_t mmap_impl, lazyfree_madv_impl_t madv_impl) {
-    UNUSED(cache_size);
-    UNUSED(mmap_impl);
-    UNUSED(madv_impl);
+lazyfree_cache_t stub_cache_new(size_t capacity_bytes, size_t lazyfree_chunks, size_t anon_chunks, size_t disk_chunks) {
+    UNUSED(capacity_bytes);
+    UNUSED(lazyfree_chunks);
+    UNUSED(anon_chunks);
+    UNUSED(disk_chunks);
     return (lazyfree_cache_t)(&EMPTY_PAGE);
 }
 
@@ -54,16 +55,17 @@ void stub_cache_write_unlock(lazyfree_cache_t cache, bool drop) {
 
 struct lazyfree_impl lazyfree_stub_impl() {
     return (struct lazyfree_impl){
-    .new = stub_cache_new,
-    .free = stub_cache_free,
+        .new = stub_cache_new,
+        .free = stub_cache_free,
 
-    .read_lock = stub_cache_read_lock,
-    .read_unlock = stub_cache_read_unlock,
+        .read_lock = stub_cache_read_lock,
+        .read_unlock = stub_cache_read_unlock,
 
-    .write_lock = stub_cache_write_lock,
-    .write_unlock = stub_cache_write_unlock,
+        .write_lock = stub_cache_write_lock,
+        .write_unlock = stub_cache_write_unlock,
 
-    .mmap_impl = lazyfree_mmap_anon,
-    .madv_impl = NULL,
+        .lazyfree_chunks = NUMBER_OF_CHUNKS,
+        .anon_chunks = 0,
+        .disk_chunks = 0,
     };
 }

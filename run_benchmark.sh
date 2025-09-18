@@ -18,7 +18,7 @@ run_test() {
                 # --memory-swappiness=0 \
 }
 #        impl     capacity  reclaim soft_limit  hard_limit
-run_test lazyfree 8         6       8.25         8.5
+run_test lazyfree 8         4       8.25         8.5
 run_test disk     8         6       8.25         8.5
 run_test anon     2         6       8.25         8.5
 run_test stub     8         6       8.25         8.5

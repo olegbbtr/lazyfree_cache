@@ -51,9 +51,7 @@ void lazyfree_write_unlock(lazyfree_cache_t cache, bool drop);
 // ================================ Extra API ===================================
 
 // Crete cache with custom memory implementation.
-lazyfree_cache_t lazyfree_cache_new_ex(size_t cache_capacity, 
-                                       lazyfree_mmap_impl_t mmap_impl, 
-                                       lazyfree_madv_impl_t madv_impl);
+lazyfree_cache_t lazyfree_cache_new_ex(size_t cache_capacity, size_t lazyfree_chunks, size_t anon_chunks, size_t disk_chunks);
 
 // Returns stats and remembers verbosity.
 struct lazyfree_stats lazyfree_fetch_stats(lazyfree_cache_t cache, bool verbose);

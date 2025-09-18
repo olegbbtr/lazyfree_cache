@@ -14,17 +14,26 @@
 
 static uint8_t                  EMPTY_PAGE[PAGE_SIZE];
 
+
+
 // == Memory allocation ==
+
+typedef void* (*mmap_impl_t)(size_t size);
 
 // Allocate anonymous memory.
 void *lazyfree_mmap_anon(size_t size);
 // Allocate file memory.
 void *lazyfree_mmap_file(size_t size);
 
+typedef void (*madv_impl_t)(void *memory, size_t size);
+
 // MADV_FREE
 void lazyfree_madv_free(void *memory, size_t size);
 
 // MADV_COLD
 void lazyfree_madv_cold(void *memory, size_t size);
+
+// nop
+void lazyfree_madv_nop(void *memory, size_t size);
 
 #endif

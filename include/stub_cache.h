@@ -6,7 +6,7 @@
 #include "cache.h"
 
 
-lazyfree_cache_t stub_cache_new(size_t /*cache_size*/, lazyfree_mmap_impl_t /*mmap_impl*/, lazyfree_madv_impl_t /*madv_impl*/);
+lazyfree_cache_t stub_cache_new(size_t /*cache_size*/, size_t /*lazyfree_chunks*/, size_t /*anon_chunks*/, size_t /*disk_chunks*/);
 void stub_cache_free(lazyfree_cache_t /*lfcache*/);
 
 // == Read Lock API ==

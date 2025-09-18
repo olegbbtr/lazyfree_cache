@@ -10,10 +10,8 @@
 // ================================ Building blocks ================================
 
 typedef struct lazyfree_cache* lazyfree_cache_t;
-typedef uint64_t lazyfree_key_t;
 
-typedef void* (*lazyfree_mmap_impl_t)(size_t size);
-typedef void (*lazyfree_madv_impl_t)(void *memory, size_t size);
+typedef uint64_t lazyfree_key_t;
 
 struct lazyfree_stats {
     size_t total_pages;
@@ -43,23 +41,20 @@ typedef struct {
 static inline bool lazyfree_read(lazyfree_rlock_t* lock, void *dest, size_t offset, size_t size);
 
 struct lazyfree_impl {
-    lazyfree_cache_t (*new)(size_t cache_size, lazyfree_mmap_impl_t mmap_impl, lazyfree_madv_impl_t madv_impl);
+    lazyfree_cache_t (*new)(size_t cache_size, size_t lazyfree_chunks, size_t anon_chunks, size_t disk_chunks);
     void (*free)(lazyfree_cache_t cache);
 
-    // == Optimistic Read Lock API ==
-    void (*read_lock)(lazyfree_cache_t cache, lazyfree_rlock_t* lock);
-    bool (*read_unlock)(lazyfree_cache_t cache, lazyfree_rlock_t* lock, bool drop);
-
-    // == Write Lock API ==
-    void* (*write_lock)(lazyfree_cache_t cache, lazyfree_rlock_t* lock);
+    void  (*read_lock)(   lazyfree_cache_t cache, lazyfree_rlock_t* lock);
+    bool  (*read_unlock)( lazyfree_cache_t cache, lazyfree_rlock_t* lock, bool drop);
+    void* (*write_lock)(  lazyfree_cache_t cache, lazyfree_rlock_t* lock);
     void  (*write_unlock)(lazyfree_cache_t cache, bool drop);
-
-    // == Memory implementation ==
-    lazyfree_mmap_impl_t mmap_impl;
-    lazyfree_madv_impl_t madv_impl;
 
     // == Extra API ==
     struct lazyfree_stats (*stats)(lazyfree_cache_t cache, bool verbose);
+
+    size_t lazyfree_chunks;
+    size_t anon_chunks;
+    size_t disk_chunks;
 };
 
 // ================================ Implementations ================================
@@ -91,5 +86,8 @@ static inline bool lazyfree_read(lazyfree_rlock_t* lock, void *dest, size_t offs
     }
     return LAZYFREE_LOCK_CHECK(*lock);
 }
+
+#define NUMBER_OF_CHUNKS 32
+static_assert(NUMBER_OF_CHUNKS < (1 << 7), "Too many chunks");
 
 #endif

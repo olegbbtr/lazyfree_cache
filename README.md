@@ -229,7 +229,7 @@ There are also regression tests via `./run_tests.sh`.
 - Chromium has [discardable memory](https://chromium.googlesource.com/chromium/src/%2B/main/docs/memory-infra/probe-cc.md?utm_source=chatgpt.com#Discardable-Category).
 - [Purgable](https://github.com/skeeto/purgeable) does mmap on every allocation - too slow.
 
-## Possible application
+## Possible applications
 
 Suppose there is a [disaggregated storage](https://en.wikipedia.org/wiki/Disaggregated_storage) system.
 The "compute" part of it operates on a relatively tight working set.
